@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Симуляция: к какому режиму управления склоняется коллектив LLM-агентов",
+  "description": "A simulation of which form of governance a collective of LLM agents drifts toward",
   "packageManager": "pnpm@10.6.4",
   "scripts": {
     "sim": "tsx sim.ts",

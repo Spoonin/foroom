@@ -1,5 +1,5 @@
-// runner.ts — см. STEPS.md, шаг 2, «Протокол тика».
+// runner.ts — see STEPS.md, step 2, "Tick protocol".
 //
-// Цикл тиков: observe → tick → submit (дедлайн хода) → resolve → spawn/stop.
+// Tick loop: observe → tick → submit (turn deadline) → resolve → spawn/stop.
 
 export {};

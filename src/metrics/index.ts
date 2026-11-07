@@ -1,5 +1,5 @@
-// index.ts — см. STEPS.md, шаг 5.
+// index.ts — see STEPS.md, step 5.
 //
-// HHI веса решений, институционализация, цена управления, демография, ценности, контроль токенов.
+// HHI of decision weight, institutionalization, cost of governance, demography, values, token control.
 
 export {};

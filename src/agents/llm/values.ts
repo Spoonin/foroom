@@ -1,5 +1,5 @@
-// values.ts — см. STEPS.md, шаг 3.
+// values.ts — see STEPS.md, step 3.
 //
-// Первичная формулировка ценностей при рождении; пересмотр — действие revise_values.
+// Initial value formulation at birth; revision via the revise_values action.
 
 export {};

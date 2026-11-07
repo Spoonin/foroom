@@ -1,5 +1,5 @@
-// memory.ts — см. STEPS.md, шаг 3.
+// memory.ts — see STEPS.md, step 3.
 //
-// Полный личный лог: свои действия и сообщения + личные сообщения агенту.
+// Full personal log: own actions and messages + private messages addressed to the agent.
 
 export {};

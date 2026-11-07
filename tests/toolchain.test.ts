@@ -1,9 +1,9 @@
-// Проверка инструментов, а не логики: @cue/core резолвится и работает под vitest.
+// Toolchain check, not logic: @cue/core resolves and works under vitest.
 import { describe, expect, it } from "vitest";
 import { Supervisor } from "@cue/core";
 
 describe("toolchain", () => {
-  it("@cue/core: call к Server возвращает ответ", async () => {
+  it("@cue/core: a call to a Server returns a reply", async () => {
     const system = new Supervisor({ onError: () => {} });
     type Msg = { type: "ping"; reply: string };
     const server = system.spawnServer<{}, Msg>({

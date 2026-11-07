@@ -1,5 +1,5 @@
-// random.ts — см. STEPS.md, шаг 2.
+// random.ts — see STEPS.md, step 2.
 //
-// Случайный вылов; RNG — через конструктор.
+// Random harvest; the RNG is passed into the constructor.
 
 export {};

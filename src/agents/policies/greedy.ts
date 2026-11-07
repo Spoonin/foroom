@@ -1,5 +1,5 @@
-// greedy.ts — см. STEPS.md, шаг 2.
+// greedy.ts — see STEPS.md, step 2.
 //
-// Берёт заведомо больше своей доли.
+// Takes clearly more than its share.
 
 export {};

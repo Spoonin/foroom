@@ -1,51 +1,51 @@
-# foroom — пошаговый план реализации
+# foroom — step-by-step implementation plan
 
-Дизайн и мотивация — в [PLAN.md](PLAN.md). Здесь — порядок работы.
+Design and motivation are in [PLAN.md](PLAN.md). This file is the order of work.
 
-**Всё пишете вы. Claude проверяет и советует.**
+**You write all the code. Claude reviews and advises.**
 
-Метки ниже обозначают слои кода, а не исполнителя:
-- 🧱 **Инфраструктура** — мир, форум, журнал, провайдеры LLM, метрики, запуск;
-- ✍️ **Логика агентов** — всё в `src/agents/`.
+The labels below mark code layers, not who writes them:
+- 🧱 **Infrastructure** — world, forum, ledger, LLM providers, metrics, runner;
+- ✍️ **Agent logic** — everything in `src/agents/`.
 
-**Как идёт каждый шаг:**
-1. Сначала тесты из раздела «Тесты» шага: они фиксируют, что значит «готово».
-2. Затем код, пока тесты не станут зелёными.
-3. **Ревью:** «проверь шаг N». Claude прогоняет тесты, читает изменения и сверяет
-   с критериями шага и пунктами «На ревью смотрим».
-4. Коммит, следующий шаг.
+**How each step goes:**
+1. Tests first, from the step's "Tests" section: they pin down what "done" means.
+2. Then code, until the tests are green.
+3. **Review:** "review step N". Claude runs the tests, reads the changes and checks them
+   against the step's criteria and its "Review checklist".
+4. Commit, next step.
 
-Застряли посреди шага — спрашивайте сразу, не дожидаясь ревью: подсказка, а не готовый код.
+Stuck mid-step? Ask right away, don't wait for review: you get a hint, not finished code.
 
 ---
 
-## Структура проекта
+## Project layout
 
 ```
 foroom/
 ├── sim.ts                    🧱 CLI: pnpm sim --agents greedy:3,fairShare:2 --ticks 100 --seed 1
 ├── src/
-│   ├── contracts.ts          🧱 граница между мирами: Observation, Action, Policy (+ zod-схемы)
-│   ├── config.ts             🧱 параметры по умолчанию
-│   ├── rng.ts                🧱 сидируемый RNG
+│   ├── contracts.ts          🧱 the boundary between worlds: Observation, Action, Policy (+ zod schemas)
+│   ├── config.ts             🧱 default parameters
+│   ├── rng.ts                🧱 seeded RNG
 │   ├── world/
-│   │   ├── world.ts          🧱 актор World: пул, разрешение хода, цены, старение, смерть, рождения
-│   │   ├── forum.ts          🧱 предложения, подсчёт голосов с делегированием
-│   │   ├── ledger.ts         🧱 append-only журнал событий
-│   │   ├── chronicler.ts     🧱 общемировая сводка по журналу (детерминированная)
-│   │   └── runner.ts         🧱 цикл тиков, сбор ходов, дедлайн хода, spawn/stop акторов
-│   ├── llm/                  🧱 LLMProvider + Mock / OpenAI-compatible / Anthropic + лимит токенов
-│   ├── metrics/              🧱 концентрация, институционализация, цена управления, демография
-│   └── agents/               ✍️ логика агентов
-│       ├── citizen.ts        ✍️ актор агента
+│   │   ├── world.ts          🧱 World actor: pool, turn resolution, prices, aging, death, births
+│   │   ├── forum.ts          🧱 proposals, vote tally with delegation
+│   │   ├── ledger.ts         🧱 append-only event log
+│   │   ├── chronicler.ts     🧱 world summary from the ledger (deterministic)
+│   │   └── runner.ts         🧱 tick loop, turn collection, turn deadline, spawn/stop of actors
+│   ├── llm/                  🧱 LLMProvider + Mock / OpenAI-compatible / Anthropic + token budget
+│   ├── metrics/              🧱 concentration, institutionalization, cost of governance, demography
+│   └── agents/               ✍️ agent logic
+│       ├── citizen.ts        ✍️ the agent actor
 │       ├── policies/         ✍️ greedy.ts, fairShare.ts, random.ts, (leader.ts, follower.ts)
-│       ├── llm/              ✍️ prompt.ts, parse.ts, memory.ts, llmPolicy.ts, values.ts
-└── tests/                    тесты обоих слоёв
+│       └── llm/              ✍️ prompt.ts, parse.ts, memory.ts, llmPolicy.ts, values.ts
+└── tests/                    tests for both layers
 ```
 
-## Граница: `src/contracts.ts`
+## The boundary: `src/contracts.ts`
 
-Агент видит мир **только** через `Observation` и влияет на него **только** через `Action[]`.
+An agent sees the world **only** through `Observation` and affects it **only** through `Action[]`.
 
 ```ts
 type AgentId = string;
@@ -53,17 +53,17 @@ type AgentId = string;
 interface Observation {
   tick: number;
   self: { id: AgentId; age: number; balance: number; hungerTicks: number; parents: AgentId[]; children: AgentId[] };
-                                           // свой lifespan агент НЕ видит, только правило в laws
-  worldSummary: string;                    // от летописца; чужих балансов там нет
-  poolEstimate: number;                    // P с шумом σ
+                                           // the agent does NOT see its own lifespan, only the rule in laws
+  worldSummary: string;                    // from the Chronicler; contains no balances of others
+  poolEstimate: number;                    // P with noise σ
   laws: {
     regrowthRate: number; capacity: number; collapseAt: number; upkeep: number; prices: Prices;
-    lifespan: { mean: number; spread: 0.25 };   // правило, а не личное значение
-    maxChildren: 3;                             // за жизнь
-    starvationTicks: 3;                         // столько тиков голода подряд — смерть
+    lifespan: { mean: number; spread: 0.25 };   // the rule, not the agent's own value
+    maxChildren: 3;                             // per lifetime
+    starvationTicks: 3;                         // this many starving ticks in a row — death
   };
   alive: AgentId[];
-  // с шага 4:
+  // from step 4:
   inbox: { from: AgentId; to: AgentId | "all"; text: string }[];
   openProposals: Proposal[];
   activeQuota: number | null;
@@ -72,50 +72,51 @@ interface Observation {
 
 type Action =
   | { type: "harvest"; amount: number }
-  | { type: "say"; to: AgentId | "all"; text: string }            // шаг 4
-  | { type: "propose"; rule: { kind: "quota"; perAgent: number } } // шаг 4
-  | { type: "vote"; proposalId: string; yes: boolean }             // шаг 4
-  | { type: "delegate"; to: AgentId | null }                       // шаг 4
-  | { type: "revise_values"; text: string; reason: string }        // шаг 3
-  | { type: "pair"; with: AgentId }                                // шаг 6
-  | { type: "spawn"; partner: AgentId; count: 1 | 2 | 3; endowment: number; upbringing: string }; // шаг 6
+  | { type: "say"; to: AgentId | "all"; text: string }            // step 4
+  | { type: "propose"; rule: { kind: "quota"; perAgent: number } } // step 4
+  | { type: "vote"; proposalId: string; yes: boolean }             // step 4
+  | { type: "delegate"; to: AgentId | null }                       // step 4
+  | { type: "revise_values"; text: string; reason: string }        // step 3
+  | { type: "pair"; with: AgentId }                                // step 6
+  | { type: "spawn"; partner: AgentId; count: 1 | 2 | 3; endowment: number; upbringing: string }; // step 6
 
 interface Policy {
   decide(obs: Observation): Action[] | Promise<Action[]>;
 }
 ```
 
-**World проверяет всё сам.** Невалидное действие (нет денег, чужой id, квота превышена)
-отбрасывается и пишется в журнал как `rejected`. Агент не может сломать мир, поэтому LLM
-можно давать полную свободу.
+**World validates everything itself.** An invalid action (no money, unknown id, quota exceeded)
+is dropped and logged as `rejected`. An agent cannot break the world, so an LLM can be given
+full freedom.
 
-## Протокол тика
+## Tick protocol
 
 ```
-Runner ──observe──▶ World                       → Observation на каждого живого
+Runner ──observe──▶ World                       → an Observation for every living agent
 Runner ──cast {tick, obs, replyTo}──▶ Citizen×N
-Citizen ──cast {submit, from, tick, actions}──▶ replyTo     (ровно один раз за тик)
-Runner ждёт всех или turnDeadlineMs             → кто не успел — пустой ход (timeout в журнале)
+Citizen ──cast {submit, from, tick, actions}──▶ replyTo     (exactly once per tick)
+Runner waits for all, or turnDeadlineMs         → late agents get an empty turn (timeout in the ledger)
 Runner ──resolve(submissions)──▶ World
-   фазы: delegate → vote → propose → say → harvest (с квотой) → цены → upkeep → старение/смерть → рождения
-World ──TickReport {deaths, births}──▶ Runner   → stop() умерших, spawn новорождённых
+   phases: delegate → vote → propose → say → harvest (with quota) → prices → upkeep → aging/death → births
+World ──TickReport {deaths, births}──▶ Runner   → stop() the dead, spawn the newborns
 ```
 
-Сообщения `say` агенты получают в `inbox` **следующего** тика. Прямых сообщений
-актор-актор между агентами в v0 нет: всё общение идёт через мир, и его видит журнал.
+Agents receive `say` messages in the `inbox` of the **next** tick. There is no direct
+actor-to-actor messaging between agents in v0: all communication goes through the world, and
+the ledger sees it.
 
-## ⚠️ Главное про cue для агентов (проверено)
+## ⚠️ The key cue fact for agents (verified)
 
-Планировщик cue ждёт `drain()` каждого актора **последовательно**. Проверка: 5 акторов,
-каждый в обработчике делает `await` на 200 мс. Они завершились на **205, 405, 606, 808,
-1009 мс**, строго по очереди. Значит:
+The cue scheduler awaits each actor's `drain()` **sequentially**. Experiment: 5 actors, each
+doing a 200 ms `await` in its handler. They finished at **205, 405, 606, 808, 1009 ms**, strictly
+one after another. Therefore:
 
-- **`await` вызова LLM внутри обработчика ставит в очередь всю симуляцию**: агенты думают
-  по одному, а World стоит.
-- Тип `Handlers` к тому же требует синхронный возврат состояния.
+- **`await`ing an LLM call inside a handler queues up the entire simulation**: agents think one
+  at a time, and World stalls.
+- The `Handlers` type also requires a synchronous state return.
 
-Решение — паттерн **pipe-to-self** (как `pipeTo` в Akka): обработчик *запускает* промис
-и сразу возвращает состояние, а результат приходит отдельным сообщением себе же.
+The fix is the **pipe-to-self** pattern (like `pipeTo` in Akka): the handler *starts* the promise
+and returns state immediately; the result arrives as a separate message to itself.
 
 ```ts
 tick: (state, msg) => {
@@ -125,215 +126,210 @@ tick: (state, msg) => {
   return { ...state, pendingTick: msg.obs.tick, replyTo: msg.replyTo };
 },
 decided: (state, msg) => {
-  if (msg.tick !== state.pendingTick) return state;  // опоздавший ответ прошлого тика — выбросить
+  if (msg.tick !== state.pendingTick) return state;  // late answer from a previous tick — drop it
   state.replyTo.cast({ type: "submit", from: state.id, tick: msg.tick, actions: msg.actions });
   return { ...state, pendingTick: null };
 },
 ```
 
-Это набросок, а не готовый код: в шаге 3 вы напишете свою версию.
-Подсказка: ссылку `self` внутри обработчика получите через замыкание — переменная,
-которой присваивается результат `spawnServer`.
+This is a sketch, not finished code: you will write your own version in step 3.
+Hint: get the `self` ref inside the handler via a closure — a variable that is assigned the
+result of `spawnServer`.
 
 ---
 
-## Шаг 1. Скелет
+## Step 1. Skeleton
 
-**🧱:** `git init`, pnpm, TS, `tsx`, `vitest`, `zod`; `@cue/core` через
-`"link:../cue/packages/core"`. После правок в cue пересобрать `dist/`:
-`pnpm --filter @cue/core build` в репозитории cue (JS — tsup, типы — `tsc`); `contracts.ts` с типами и zod-схемами; `sim.ts`,
-который под Supervisor крутит пустые тики.
+**🧱:** `git init`, pnpm, TS, `tsx`, `vitest`, `zod`; `@cue/core` via
+`"link:../cue/packages/core"`. After changes in cue, rebuild `dist/` with
+`pnpm --filter @cue/core build` in the cue repo (JS via tsup, types via `tsc`);
+`contracts.ts` with types and zod schemas; `sim.ts` that runs empty ticks under a Supervisor.
 
-**✍️:** пока ничего. Достаточно, чтобы `Policy` и `Action` были в `contracts.ts`.
+**✍️:** nothing yet. It is enough to have `Policy` and `Action` in `contracts.ts`.
 
-**Тесты:** один дымовой — zod-схема принимает валидный `harvest` и отвергает `amount: -1`.
+**Tests:** one smoke test — the zod schema accepts a valid `harvest` and rejects `amount: -1`.
 
-**Готово, когда:** `pnpm sim --ticks 3` печатает три тика, `pnpm test` зелёный.
+**Done when:** `pnpm sim --ticks 3` prints three ticks, `pnpm test` is green.
 
-**На ревью смотрим:** импорт cue резолвится в `dist`, а не в исходники; типы в
-`contracts.ts` выведены из zod-схем (`z.infer`), а не продублированы руками.
+**Review checklist:** the cue import resolves to `dist`, not to the sources; the types in
+`contracts.ts` are derived from the zod schemas (`z.infer`), not duplicated by hand.
 
-## Шаг 2. Мир и агенты на правилах
+## Step 2. World and rule-based agents
 
-**🧱:** World (логистический пул, порог коллапса, пропорциональный дележ при дефиците,
-шум σ, upkeep, голод, возраст, смерть от голода и старости), Ledger, Runner, вывод `runs/<ts>.csv` с `P(t)`.
-Пока без потомства, поэтому в сценарных тестах `lifespan = Infinity`.
+**🧱:** World (logistic pool, collapse threshold, proportional split under scarcity, noise σ,
+upkeep, starvation, age, death by starvation and old age), Ledger, Runner, `runs/<ts>.csv`
+output with `P(t)`. No offspring yet, so scenario tests use `lifespan = Infinity`.
 
 **✍️:**
-1. **`policies/greedy.ts`** — берёт заведомо больше своей доли.
-2. **`policies/fairShare.ts`** — берёт свою долю устойчивого прироста.
-   Подсказка: прирост `r·P·(1 − P/K)`, все законы есть в `obs.laws`, а `P` вы знаете
-   только приблизительно. Что делать с шумом — ваше решение.
-3. **`policies/random.ts`** — случайный вылов; RNG передаётся в конструктор (детерминизм!).
-4. **`citizen.ts`** — актор: на `tick` вызвать политику и отправить `submit` в `replyTo`.
-   Политики пока синхронные, так что можно сделать «в лоб». В шаге 3 вы это переделаете,
-   и это часть опыта.
+1. **`policies/greedy.ts`** — takes clearly more than its share.
+2. **`policies/fairShare.ts`** — takes its share of the sustainable regrowth.
+   Hint: regrowth is `r·P·(1 − P/K)`, all laws are in `obs.laws`, and you only know `P`
+   approximately. What to do about the noise is your call.
+3. **`policies/random.ts`** — random harvest; the RNG is passed into the constructor (determinism!).
+4. **`citizen.ts`** — the actor: on `tick`, call the policy and send `submit` to `replyTo`.
+   Policies are synchronous for now, so the straightforward version is fine. You will rework
+   it in step 3, and that is part of the learning.
 
-**Тесты:**
-- `policies.test.ts` — greedy берёт больше fairShare; fairShare при `P = K/2` берёт ≈ `rK/4/n`;
-- `citizen.test.ts` — ровно один `submit` на тик с правильными `from` и `tick`;
-- `scenario.test.ts` — 5 × greedy обрушивают пул до 50-го тика; 5 × fairShare держат
-  `P > collapseAt` все 250 тиков.
+**Tests:**
+- `policies.test.ts` — greedy takes more than fairShare; fairShare at `P = K/2` takes ≈ `rK/4/n`;
+- `citizen.test.ts` — exactly one `submit` per tick with the correct `from` and `tick`;
+- `scenario.test.ts` — 5 × greedy collapse the pool before tick 50; 5 × fairShare keep
+  `P > collapseAt` for all 250 ticks.
 
-Плюс тесты World: дележ при дефиците пропорционален заявкам; ниже `collapseAt` пул не растёт;
-агент, не пополнивший баланс 3 тика подряд, умирает от голода, а пополнение на 2-м тике
-сбрасывает счётчик.
+Plus World tests: the split under scarcity is proportional to demand; below `collapseAt` the
+pool does not grow; an agent without income for 3 ticks in a row dies of starvation, while
+income on the 2nd tick resets the counter.
 
-**Совет:** математику мира (`regrow`, `allocate`, `resolve`) сделайте **чистыми функциями**
-над состоянием, а актор World — тонкой обёрткой. Тогда её легко тестировать без акторов
-и без асинхронности.
+**Tip:** make the world math (`regrow`, `allocate`, `resolve`) **pure functions** over state,
+and the World actor a thin wrapper. Then it is easy to test without actors and without async.
 
-**На ревью смотрим:** детерминизм (один сид → один CSV, проверить двумя прогонами);
-нигде нет `Math.random`; порядок обработки агентов не зависит от того, кто первым прислал ход.
+**Review checklist:** determinism (one seed → one CSV, check with two runs); no `Math.random`
+anywhere; the order in which agents are processed does not depend on who submitted first.
 
-## Шаг 3. LLM-агент
+## Step 3. LLM agent
 
 **🧱:**
 - `LLMProvider`;
-- `MockProvider` с заготовленными ответами и задержкой;
-- `OpenAICompatibleProvider` (OpenAI, OpenRouter, Ollama, LM Studio) и `AnthropicProvider` — на голом `fetch`, без SDK;
-- обёртка `BudgetedProvider`: логирует `usage` и останавливает прогон при глобальном лимите;
-- конфиг `llm: { provider, baseUrl, model, maxTokens }` и `.env`.
+- `MockProvider` with canned responses and a delay;
+- `OpenAICompatibleProvider` (OpenAI, OpenRouter, Ollama, LM Studio) and `AnthropicProvider` — on plain `fetch`, no SDK;
+- a `BudgetedProvider` wrapper: logs `usage` and stops the run at the global budget;
+- config `llm: { provider, baseUrl, model, maxTokens }` and `.env`.
 
 **✍️:**
 1. **`llm/prompt.ts`** — `buildPrompt(obs, memory, values) → { system, messages }`.
-   Описать мир, действия и формат ответа. **Не называть режимы управления**
-   (анархия, демократия и так далее) — это требование эксперимента.
-2. **`llm/parse.ts`** — `parseActions(text) → { actions, errors }` по zod-схемам из
-   `contracts.ts`. В тесты стоит включить: JSON в ```-блоке, текст до и после, неизвестный
-   `type`, отрицательный `amount`, пустой ответ.
-3. **`llm/llmPolicy.ts`** — склейка: prompt → provider → parse. Решите, что делать с
-   ошибкой парсинга: пустой ход или одна повторная попытка с текстом ошибки. Это решение
-   влияет на расход токенов.
-4. **`llm/memory.ts`** — личный лог **полностью**: свои действия и сообщения плюс личные
-   сообщения, адресованные агенту. Общемировая картина приходит в `obs.worldSummary`,
-   хранить её историю не нужно.
-5. **`llm/values.ts`** — первый вызов в жизни агента: по `worldSummary` (и воспитанию,
-   с шага 6) агент формулирует свои цели и приоритеты. Результат хранится в состоянии
-   Citizen и входит в каждый промпт. Пересмотр — действие `revise_values` в обычном ходе:
-   Citizen заменяет ценности у себя, World пишет новую версию в журнал. Тесты на
-   `MockProvider`: первичная формулировка запрашивается ровно один раз; после
-   `revise_values` следующий промпт содержит новую версию.
-6. **Переделать `citizen.ts` на pipe-to-self.** Тест: 5 агентов с `MockProvider`
-   (задержка 200 мс) должны уложиться в ~200 мс, а не в ~1000.
+   Describe the world, the actions and the response format. **Do not name forms of governance**
+   (anarchy, democracy and so on) — this is a requirement of the experiment.
+2. **`llm/parse.ts`** — `parseActions(text) → { actions, errors }` using the zod schemas from
+   `contracts.ts`. Worth covering in tests: JSON inside a ``` block, text before and after,
+   unknown `type`, negative `amount`, empty response.
+3. **`llm/llmPolicy.ts`** — the glue: prompt → provider → parse. Decide what to do on a parse
+   error: an empty turn, or one retry with the error text. This decision affects token usage.
+4. **`llm/memory.ts`** — the personal log **in full**: own actions and messages plus private
+   messages addressed to the agent. The world picture arrives in `obs.worldSummary`; there is
+   no need to keep its history.
+5. **`llm/values.ts`** — the first call of an agent's life: from `worldSummary` (and upbringing,
+   from step 6) the agent formulates its goals and priorities. The result is stored in Citizen
+   state and included in every prompt. Revision is the `revise_values` action on a normal turn:
+   Citizen replaces its values, World writes the new version to the ledger. Tests on
+   `MockProvider`: the initial formulation is requested exactly once; after `revise_values` the
+   next prompt contains the new version.
+6. **Rework `citizen.ts` to pipe-to-self.** Test: 5 agents with `MockProvider` (200 ms delay)
+   must finish in ~200 ms, not ~1000.
 
-**Готово, когда:** `pnpm sim --agents llm:3,fairShare:2 --ticks 20 --provider ollama`
-проходит, и в журнале видны ходы и реальный расход токенов.
+**Done when:** `pnpm sim --agents llm:3,fairShare:2 --ticks 20 --provider ollama` completes,
+and the ledger shows the turns and real token usage.
 
-**Совет:** сначала доведите всё до зелёного на `MockProvider`, и только потом включайте
-настоящую модель. Сетевые адаптеры проверяйте отдельным ручным скриптом, а не юнит-тестами.
+**Tip:** get everything green on `MockProvider` first, and only then switch to a real model.
+Check the network adapters with a separate manual script, not with unit tests.
 
-**На ревью смотрим:** ни одного `await` в обработчиках акторов; ключи только из `.env`
-(и `.env` в `.gitignore`); лимит токенов реально останавливает прогон; промпт не
-содержит названий режимов.
+**Review checklist:** not a single `await` in actor handlers; keys only from `.env` (and `.env`
+is in `.gitignore`); the token budget really stops the run; the prompt contains no regime names.
 
-## Шаг 3.5 (необязательный). Агент на LangGraph
+## Step 3.5 (optional). Agent on LangGraph
 
-Цель — понять, что даёт фреймворк для агентов по сравнению с ручным циклом из шага 3.
-LangGraph используется **только внутри одного агента**, за границей `Policy`. Коллектив
-остаётся на акторах cue: общее состояние графа уничтожило бы информационную асимметрию,
-на которой держится эксперимент.
+The goal is to understand what an agent framework gives you compared with the hand-written
+loop from step 3. LangGraph is used **only inside a single agent**, behind the `Policy`
+boundary. The collective stays on cue actors: a shared graph state would destroy the
+information asymmetry the experiment relies on.
 
-**✍️:** `src/agents/llm/graphPolicy.ts` — вторая реализация `Policy` на `@langchain/langgraph`:
+**✍️:** `src/agents/llm/graphPolicy.ts` — a second `Policy` implementation on `@langchain/langgraph`:
 
 ```
-observe → reflect → plan → draft → validate ──невалидно──▶ draft  (≤ 2 попыток)
-                                            └─ок──▶ Action[]
+observe → reflect → plan → draft → validate ──invalid──▶ draft  (≤ 2 attempts)
+                                            └─ok──▶ Action[]
 ```
 
-- переиспользуйте `prompt.ts` и `parse.ts` из шага 3 внутри узлов, а не пишите заново;
-- модель подключите через интеграцию LangChain, либо оберните ваш `LLMProvider` в узел.
-  Второй вариант сохраняет общий учёт токенов через `BudgetedProvider`;
-- в CLI появляется тип агента `graph`: `--agents llm:3,graph:3,fairShare:2`.
+- reuse `prompt.ts` and `parse.ts` from step 3 inside the nodes instead of rewriting them;
+- connect the model via a LangChain integration, or wrap your `LLMProvider` in a node.
+  The second option keeps shared token accounting through `BudgetedProvider`;
+- the CLI gets a `graph` agent type: `--agents llm:3,graph:3,fairShare:2`.
 
-**Тесты:** на `MockProvider` — невалидный первый ответ ведёт ко второй попытке, два невалидных подряд дают
-пустой ход; граф не делает больше заданного числа вызовов модели.
+**Tests:** on `MockProvider` — an invalid first answer leads to a second attempt, two invalid
+answers in a row give an empty turn; the graph never makes more model calls than allowed.
 
-**Что сравнить** (смешанное население, несколько сидов):
+**What to compare** (mixed population, several seeds):
 
-| Метрика | Вопрос |
+| Metric | Question |
 |---|---|
-| доля пустых ходов из-за ошибок разбора | помогает ли цикл валидации? |
-| реальные токены на ход | сколько стоят `reflect` и `plan`? |
-| поведение и итоговый режим | думает ли «рефлексирующий» агент политически иначе? |
+| share of empty turns due to parse errors | does the validation loop help? |
+| real tokens per turn | how much do `reflect` and `plan` cost? |
+| behavior and resulting regime | does a "reflective" agent think differently politically? |
 
-**На ревью смотрим:**
-- `graph.invoke()` вызывается через pipe-to-self, без `await` в обработчике;
-- у памяти один источник правды: либо состояние актора, либо чекпоинтер с
-  `thread_id = agentId`, но не оба сразу (иначе память расходится после рестарта под Supervisor);
-- зависимость от LangChain не протекла за пределы `graphPolicy.ts`.
+**Review checklist:**
+- `graph.invoke()` is called via pipe-to-self, with no `await` in the handler;
+- memory has a single source of truth: either actor state or a checkpointer with
+  `thread_id = agentId`, not both (otherwise memory diverges after a restart under the Supervisor);
+- the LangChain dependency does not leak outside `graphPolicy.ts`.
 
-## Шаг 4. Форум
+## Step 4. Forum
 
-**🧱:** Forum — предложения с id, окно голосования 1 тик, подсчёт с транзитивным
-делегированием и защитой от циклов. World ограничивает вылов принятой квотой и списывает
-цены действий; если денег не хватает — `rejected`. В `Observation` появляются `inbox`,
-`openProposals`, `activeQuota`, `myDelegate`.
+**🧱:** Forum — proposals with ids, a 1-tick voting window, a tally with transitive delegation
+and cycle protection. World caps harvest at the adopted quota and charges action prices; if
+there is not enough money — `rejected`. `Observation` gains `inbox`, `openProposals`,
+`activeQuota`, `myDelegate`.
 
 **✍️:**
-1. Раздел форума в промпте: что видно, какие действия есть, сколько стоят.
-2. Научить политики на правилах голосовать: fairShare голосует «за» квоту ≤ своей оценки,
-   greedy — «против».
-3. **`leader.ts`** и **`follower.ts`**. Лидер предлагает квоту и просит делегировать.
-   Последователь делегирует самому активному предлагающему. Это эталон «концентрации»
-   для калибровки метрик ещё до LLM.
+1. A forum section in the prompt: what is visible, which actions exist, what they cost.
+2. Teach the rule-based policies to vote: fairShare votes "yes" for a quota ≤ its own estimate,
+   greedy votes "no".
+3. **`leader.ts`** and **`follower.ts`**. The leader proposes a quota and asks others to
+   delegate. The follower delegates to the most active proposer. This is the "concentration"
+   reference used to calibrate the metrics before any LLM is involved.
 
-**Тесты:** большинство fairShare принимает свою квоту; делегирование меняет исход;
-цикл делегирования не роняет подсчёт.
+**Tests:** a fairShare majority adopts its quota; delegation changes the outcome; a delegation
+cycle does not break the tally.
 
-**На ревью смотрим:** подсчёт голосов — чистая функция; что происходит с голосом
-агента, который делегировал и при этом проголосовал сам (правило должно быть явным и
-описано в промпте).
+**Review checklist:** the vote tally is a pure function; what happens to the vote of an agent
+who delegated and also voted itself (the rule must be explicit and described in the prompt).
 
-## Шаг 5. Метрики
+## Step 5. Metrics
 
 **🧱:**
-- HHI веса решений, институционализация, цена управления, глубина родословной;
-- контроль: реальные токены на ход по агентам;
-- `runs/<ts>.json` и краткая сводка в консоль.
+- HHI of decision weight, institutionalization, cost of governance, lineage depth;
+- control: real tokens per turn per agent;
+- `runs/<ts>.json` and a short console summary.
 
-Калибровочные прогоны на ваших политиках:
+Calibration runs on your policies:
 
-| Состав | Ожидаемый сигнал |
+| Composition | Expected signal |
 |---|---|
-| leader + followers | высокая концентрация |
-| все fairShare с голосованием | низкая концентрация, высокая институционализация |
-| все greedy | анархия |
+| leader + followers | high concentration |
+| all fairShare with voting | low concentration, high institutionalization |
+| all greedy | anarchy |
 
-**✍️:** проверить, что метрики видят то, что вы ожидаете от своих политик. Если нет —
-ошибка либо в метрике, либо в ожидании. Разобраться, в чём именно.
+**✍️:** check that the metrics see what you expect from your policies. If not, the bug is
+either in the metric or in the expectation. Figure out which.
 
-## Шаг 6. Потомство
+## Step 6. Offspring
 
-**🧱:** World обрабатывает `pair` (взаимное предложение, действует k тиков; это разовая
-сделка, общего баланса у пары нет) и `spawn` (минимальный возраст `L/4`, у каждого
-родителя не больше 3 детей за жизнь, списание `endowment`, `maxPopulation`, `P > P_birth`).
-Родословная — id родителей и глубина. Новорождённый по умолчанию делегирует голос
-родителю. Runner порождает акторов детей под Supervisor и делает `stop()` умершим.
+**🧱:** World handles `pair` (a mutual offer, valid for k ticks; a one-off deal, the pair has
+no shared balance) and `spawn` (minimum age `L/4`, at most 3 children per parent per lifetime,
+`endowment` debited, `maxPopulation`, `P > P_birth`). Lineage — parent ids and depth. A newborn
+delegates its vote to a parent by default. Runner spawns child actors under the Supervisor and
+calls `stop()` on the dead.
 
 **✍️:**
-1. **Воспитание:** текст `upbringing` родитель пишет в том же ходе, что и `spawn`,
-   без отдельного вызова LLM. Ребёнок получает его в первой памяти и передаёт в
-   `values.ts` вместе с `worldSummary`. Числовых генов нет: воспитание — единственный канал
-   наследования ценностей.
-2. **Решение о потомстве** в политиках на правилах (например, fairShare рожает при
-   balance > X и здоровом пуле) и раздел в промпте для LLM.
-3. Ребёнок может отозвать делегирование родителю — это уже его политика.
+1. **Upbringing:** the parent writes the `upbringing` text in the same turn as `spawn`, with no
+   separate LLM call. The child gets it in its initial memory and passes it to `values.ts`
+   together with `worldSummary`. There are no numeric genes: upbringing is the only channel of
+   value inheritance.
+2. **The reproduction decision** in the rule-based policies (e.g. fairShare reproduces when
+   balance > X and the pool is healthy) and a prompt section for the LLM.
+3. A child may revoke its delegation to a parent — that is its own policy.
 
-**Готово, когда:** прогон на правилах на 250 тиков (`lifespan` по умолчанию: 40 ± 25%)
-доходит до глубины родословной ~10.
+**Done when:** a rule-based 250-tick run (default `lifespan`: 40 ± 25%) reaches lineage depth ~10.
 
-**На ревью смотрим:** у мёртвых акторов не остаётся висящих ссылок в Runner (и в
-`Registry`, если используете); dead letters от `stop()` логируются, а не теряются;
-население не уходит в бесконечный рост или в ноль на нескольких сидах.
+**Review checklist:** no dangling refs to dead actors in Runner (or in `Registry`, if you use
+it); dead letters from `stop()` are logged, not lost; the population neither explodes nor dies
+out across several seeds.
 
 ---
 
-## Принятые по умолчанию решения (можно пересмотреть)
+## Defaults adopted (open to revision)
 
-- Законы природы (`r`, `K`, `collapseAt`, цены) агентам известны, а текущий `P` — только с шумом.
-- Окно голосования — 1 тик; квота действует, пока её не заменят новой.
-- Сообщения доставляются со следующим тиком.
-- В шаге 2 агенты бессмертны, срок жизни включается в шаге 6.
-- Летописец детерминированный: шаблон по журналу, без LLM.
-- Тестовый раннер — vitest (с ESM и TS проще, чем jest в cue).
+- The laws of nature (`r`, `K`, `collapseAt`, prices) are known to agents; the current `P` only with noise.
+- The voting window is 1 tick; a quota stays in force until replaced by a new one.
+- Messages are delivered on the next tick.
+- In step 2 agents are immortal; lifespan is switched on in step 6.
+- The Chronicler is deterministic: a template over the ledger, no LLM.
+- The test runner is vitest (simpler with ESM and TS than jest in cue).

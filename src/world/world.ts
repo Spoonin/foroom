@@ -1,5 +1,5 @@
-// world.ts — см. STEPS.md, шаг 2 (форум — шаг 4, рождения — шаг 6).
+// world.ts — see STEPS.md, step 2 (forum — step 4, births — step 6).
 //
-// Чистые функции мира (regrow, allocate, resolve) + тонкий актор World поверх них.
+// Pure world functions (regrow, allocate, resolve) + a thin World actor on top of them.
 
 export {};

@@ -1,5 +1,5 @@
-// rng.ts — см. STEPS.md, шаг 2.
+// rng.ts — see STEPS.md, step 2.
 //
-// Сидируемый RNG (например, mulberry32). Math.random в проекте не используется.
+// Seeded RNG (e.g. mulberry32). Math.random is not used anywhere in the project.
 
 export {};

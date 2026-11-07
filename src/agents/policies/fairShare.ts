@@ -1,5 +1,5 @@
-// fairShare.ts — см. STEPS.md, шаг 2.
+// fairShare.ts — see STEPS.md, step 2.
 //
-// Своя доля устойчивого прироста r·P·(1 − P/K) при шумной оценке P.
+// Its share of the sustainable regrowth r·P·(1 − P/K) under a noisy estimate of P.
 
 export {};

@@ -1,4 +1,4 @@
-// provider.ts — см. STEPS.md, шаг 3.
+// provider.ts — see STEPS.md, step 3.
 //
 // LLMProvider + MockProvider, OpenAICompatibleProvider, AnthropicProvider, BudgetedProvider.
 

@@ -1,5 +1,5 @@
-// forum.ts — см. STEPS.md, шаг 4.
+// forum.ts — see STEPS.md, step 4.
 //
-// Предложения, окно голосования, подсчёт с транзитивным делегированием и защитой от циклов.
+// Proposals, voting window, tally with transitive delegation and cycle protection.
 
 export {};

@@ -1,5 +1,5 @@
-// chronicler.ts — см. STEPS.md, шаг 3.
+// chronicler.ts — see STEPS.md, step 3.
 //
-// Детерминированная общемировая сводка по журналу (без LLM, без чужих балансов).
+// Deterministic world summary from the ledger (no LLM, no balances of others).
 
 export {};

@@ -1,5 +1,5 @@
-// citizen.ts — см. STEPS.md, шаг 2 (pipe-to-self — шаг 3).
+// citizen.ts — see STEPS.md, step 2 (pipe-to-self — step 3).
 //
-// Актор агента: на tick — решение политики, ровно один submit в replyTo. Без await в обработчиках.
+// The agent actor: on tick — the policy decides, exactly one submit to replyTo. No await in handlers.
 
 export {};

@@ -1,5 +1,5 @@
-// ledger.ts — см. STEPS.md, шаг 2.
+// ledger.ts — see STEPS.md, step 2.
 //
-// Append-only журнал событий — источник всех метрик.
+// Append-only event log — the source of all metrics.
 
 export {};

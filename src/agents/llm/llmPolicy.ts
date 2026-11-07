@@ -1,5 +1,5 @@
-// llmPolicy.ts — см. STEPS.md, шаг 3.
+// llmPolicy.ts — see STEPS.md, step 3.
 //
-// Склейка: prompt → provider → parse.
+// The glue: prompt → provider → parse.
 
 export {};

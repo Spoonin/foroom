@@ -1,5 +1,5 @@
-// contracts.ts — см. STEPS.md, «Граница: src/contracts.ts», шаг 1.
+// contracts.ts — see STEPS.md, "The boundary: src/contracts.ts", step 1.
 //
-// Zod-схемы Observation, Action, Prices, Proposal; типы через z.infer; интерфейс Policy.
+// Zod schemas for Observation, Action, Prices, Proposal; types via z.infer; the Policy interface.
 
 export {};

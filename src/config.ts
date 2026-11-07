@@ -1,5 +1,5 @@
-// config.ts — см. STEPS.md, шаг 2.
+// config.ts — see STEPS.md, step 2.
 //
-// Параметры мира по умолчанию: r, K, collapseAt, σ, upkeep, цены, L, T, starvationTicks.
+// Default world parameters: r, K, collapseAt, σ, upkeep, prices, L, T, starvationTicks.
 
 export {};
