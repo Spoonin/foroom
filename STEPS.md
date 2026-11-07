@@ -29,11 +29,11 @@ foroom/
 │   ├── config.ts             🧱 default parameters
 │   ├── rng.ts                🧱 seeded RNG
 │   ├── world/
-│   │   ├── world.ts          🧱 World actor: pool, turn resolution, prices, aging, death, births
-│   │   ├── forum.ts          🧱 proposals, vote tally with delegation
-│   │   ├── ledger.ts         🧱 append-only event log
-│   │   ├── chronicler.ts     🧱 world summary from the ledger (deterministic)
-│   │   └── runner.ts         🧱 tick loop, turn collection, turn deadline, spawn/stop of actors
+│   │   ├── world.ts          🧱 World Server: pool, forum state, turn resolution, prices, aging, death, births
+│   │   ├── forum.ts          🧱 pure functions (no actor): proposals, vote tally with delegation
+│   │   ├── ledger.ts         🧱 Ledger Agent: append-only event log
+│   │   ├── chronicler.ts     🧱 pure function (no actor): ledger → world summary (deterministic)
+│   │   └── runner.ts         🧱 tick loop, TurnCollector, turn deadline, spawn/stop of actors
 │   ├── llm/                  🧱 LLMProvider + Mock / OpenAI-compatible / Anthropic + token budget
 │   ├── metrics/              🧱 concentration, institutionalization, cost of governance, demography
 │   └── agents/               ✍️ agent logic
@@ -55,7 +55,7 @@ interface Observation {
   self: { id: AgentId; age: number; balance: number; hungerTicks: number; parents: AgentId[]; children: AgentId[] };
                                            // the agent does NOT see its own lifespan, only the rule in laws
   worldSummary: string;                    // from the Chronicler; contains no balances of others
-  poolEstimate: number;                    // P with noise σ
+  poolEstimate: number;                    // P with noise σ, drawn per agent per tick (private)
   laws: {
     regrowthRate: number; capacity: number; collapseAt: number; upkeep: number; prices: Prices;
     lifespan: { mean: number; spread: 0.25 };   // the rule, not the agent's own value
@@ -64,46 +64,72 @@ interface Observation {
   };
   alive: AgentId[];
   // from step 4:
-  inbox: { from: AgentId; to: AgentId | "all"; text: string }[];
   openProposals: Proposal[];
   activeQuota: number | null;
   myDelegate: AgentId | null;
 }
+// The inbox is NOT part of Observation: World never sees messages. Citizen keeps its own
+// inbox and hands it to the policy next to obs.
 
-type Action =
-  | { type: "harvest"; amount: number }
+// Local actions — handled by Citizen, free.
+type LocalAction =
   | { type: "say"; to: AgentId | "all"; text: string }            // step 4
+  | { type: "revise_values"; text: string; reason: string };      // step 3
+
+// World actions — submitted to World, each has a price in laws.prices.
+type WorldAction =
+  | { type: "harvest"; amount: number }
   | { type: "propose"; rule: { kind: "quota"; perAgent: number } } // step 4
   | { type: "vote"; proposalId: string; yes: boolean }             // step 4
   | { type: "delegate"; to: AgentId | null }                       // step 4
-  | { type: "revise_values"; text: string; reason: string }        // step 3
   | { type: "pair"; with: AgentId }                                // step 6
   | { type: "spawn"; partner: AgentId; count: 1 | 2 | 3; endowment: number; upbringing: string }; // step 6
 
-interface Policy {
-  decide(obs: Observation): Action[] | Promise<Action[]>;
-}
+type Action = LocalAction | WorldAction;
+
+interface Message { from: AgentId; to: AgentId | "all"; tick: number; text: string }
+
+// The agent's brain: a plain function. State (RNG, provider) lives in a closure,
+// e.g. makeRandomPolicy(rng) returns a Policy.
+type Policy = (obs: Observation, inbox: Message[]) => Action[] | Promise<Action[]>;
 ```
+
+A policy returns one mixed `Action[]`; Citizen splits it: local actions it handles itself,
+world actions go to `submit`. Two zod schemas joined into one union keep that split in one place.
 
 **World validates everything itself.** An invalid action (no money, unknown id, quota exceeded)
 is dropped and logged as `rejected`. An agent cannot break the world, so an LLM can be given
-full freedom.
+full freedom. Citizen does the same for `say`: unknown recipient, over the per-tick cap, too
+long — dropped and logged.
 
 ## Tick protocol
 
 ```
 Runner ──observe──▶ World                       → an Observation for every living agent
-Runner ──cast {tick, obs, replyTo}──▶ Citizen×N
-Citizen ──cast {submit, from, tick, actions}──▶ replyTo     (exactly once per tick)
+Runner ──cast {tick, obs, peers, replyTo: TurnCollector}──▶ Citizen×N
+Citizen decides, then, in this order:
+   ──cast {hear, msg}──▶ other Citizens          (direct, free; each message first goes to Ledger)
+   ──cast {submit, from, tick, worldActions}──▶ TurnCollector   (exactly once per tick)
 Runner waits for all, or turnDeadlineMs         → late agents get an empty turn (timeout in the ledger)
 Runner ──resolve(submissions)──▶ World
-   phases: delegate → vote → propose → say → harvest (with quota) → prices → upkeep → aging/death → births
+   phases: delegate → vote → propose → harvest (with quota) → prices → upkeep → aging/death → births
 World ──TickReport {deaths, births}──▶ Runner   → stop() the dead, spawn the newborns
 ```
 
-Agents receive `say` messages in the `inbox` of the **next** tick. There is no direct
-actor-to-actor messaging between agents in v0: all communication goes through the world, and
-the ledger sees it.
+Talk is direct actor-to-actor messaging; World does not take part in it.
+- `peers` is a `ReadonlyMap<AgentId, ServerRef>` of the living, built by Runner every tick.
+  Citizen uses it only inside its send function; the policy never sees refs.
+- **Why messages arrive "on the next tick" without any extra logic:** a recipient gets `hear`
+  while it is still thinking (the sender has already decided), so the `hear` handler only
+  appends to the inbox, and the message is used on the next `tick`.
+- **Order matters: `hear` before `submit`.** Runner sends the next `tick` only after the last
+  `submit`. If every message is cast before its sender's `submit`, it is already in the
+  recipient's mailbox ahead of the next `tick`. Swap the order and a message can slip one
+  tick later.
+- A late answer (past the deadline) is dropped in `decided` along with its messages, so a slow
+  agent cannot speak into the next tick.
+- **Sort the inbox** by `(tick, from)` before building a prompt, not by arrival order —
+  otherwise the faster model's words come first.
 
 ## ⚠️ The key cue fact for agents (verified)
 
@@ -116,11 +142,17 @@ one after another. Therefore:
 - The `Handlers` type also requires a synchronous state return.
 
 The fix is the **pipe-to-self** pattern (like `pipeTo` in Akka): the handler *starts* the promise
-and returns state immediately; the result arrives as a separate message to itself.
+and returns state immediately; the result (the `Action[]` the policy resolves to) arrives as a
+separate `decided` message to itself.
+
+Rule: a promise callback may only send messages. Anything that touches actor state goes
+through the mailbox — the callback runs outside the actor, sees a stale `state` snapshot, and
+its errors bypass the Supervisor.
 
 ```ts
 tick: (state, msg) => {
-  policy.decide(msg.obs)
+  Promise.resolve()
+    .then(() => policy(msg.obs, state.inbox))  // a sync array or a Promise; a sync throw is caught too
     .then(actions => self.cast({ type: "decided", tick: msg.obs.tick, actions }))
     .catch(err   => self.cast({ type: "decided", tick: msg.obs.tick, actions: [], error: String(err) }));
   return { ...state, pendingTick: msg.obs.tick, replyTo: msg.replyTo };
@@ -157,8 +189,13 @@ result of `spawnServer`.
 ## Step 2. World and rule-based agents
 
 **🧱:** World (logistic pool, collapse threshold, proportional split under scarcity, noise σ,
-upkeep, starvation, age, death by starvation and old age), Ledger, Runner, `runs/<ts>.csv`
-output with `P(t)`. No offspring yet, so scenario tests use `lifespan = Infinity`.
+upkeep, starvation, age, death by starvation and old age), Ledger, Runner with TurnCollector,
+`runs/<ts>.csv` output with `P(t)`. No offspring yet, so scenario tests use `lifespan = Infinity`.
+
+TurnCollector: a cue `call` reply is synchronous, so "reply when everyone has submitted" is
+not a plain `call`. Give the collector an `onComplete` callback and let Runner wrap it in a
+`Promise` with the deadline timer. Rules to test: a duplicate `submit` from the same agent in
+the same tick — the first one counts; a `submit` carrying another tick number — dropped.
 
 **✍️:**
 1. **`policies/greedy.ts`** — takes clearly more than its share.
@@ -178,13 +215,14 @@ output with `P(t)`. No offspring yet, so scenario tests use `lifespan = Infinity
 
 Plus World tests: the split under scarcity is proportional to demand; below `collapseAt` the
 pool does not grow; an agent without income for 3 ticks in a row dies of starvation, while
-income on the 2nd tick resets the counter.
+income on the 2nd tick resets the counter; an agent with balance 0 can still harvest (the fee
+comes out of the yield, and a yield smaller than the fee gives net 0, never negative).
 
 **Tip:** make the world math (`regrow`, `allocate`, `resolve`) **pure functions** over state,
 and the World actor a thin wrapper. Then it is easy to test without actors and without async.
 
 **Review checklist:** determinism (one seed → one CSV, check with two runs); no `Math.random`
-anywhere; the order in which agents are processed does not depend on who submitted first.
+anywhere; `poolEstimate` differs between agents in the same tick (independent noise draws); the order in which agents are processed does not depend on who submitted first.
 
 ## Step 3. LLM agent
 
@@ -215,6 +253,11 @@ anywhere; the order in which agents are processed does not depend on who submitt
    next prompt contains the new version.
 6. **Rework `citizen.ts` to pipe-to-self.** Test: 5 agents with `MockProvider` (200 ms delay)
    must finish in ~200 ms, not ~1000.
+
+   Exercise: first try the direct variant — `.then(actions => replyTo.cast(submit))` with no
+   message to self — and write two tests: (a) an agent stopped while thinking must not submit;
+   (b) after a turn, the agent's memory contains a record of it. See which one fails, and let
+   that failure justify the switch to pipe-to-self.
 
 **Done when:** `pnpm sim --agents llm:3,fairShare:2 --ticks 20 --provider ollama` completes,
 and the ledger shows the turns and real token usage.
@@ -261,26 +304,52 @@ answers in a row give an empty turn; the graph never makes more model calls than
   `thread_id = agentId`, not both (otherwise memory diverges after a restart under the Supervisor);
 - the LangChain dependency does not leak outside `graphPolicy.ts`.
 
-## Step 4. Forum
+## Step 4. Talk and forum
 
-**🧱:** Forum — proposals with ids, a 1-tick voting window, a tally with transitive delegation
-and cycle protection. World caps harvest at the adopted quota and charges action prices; if
-there is not enough money — `rejected`. `Observation` gains `inbox`, `openProposals`,
-`activeQuota`, `myDelegate`.
+**Talk (✍️, in `citizen.ts`):** direct messages between citizens, free in credits.
+- A `hear` handler appends to the inbox in Citizen state.
+- One send function: Ledger first, then `cast` to the recipient (or to every peer for `"all"`).
+  Caps from config: `maxMessagesPerTick`, `maxMessageChars`; anything over is dropped and logged.
+- Death and messages, as cue actually behaves (checked in `actor.ts`):
+  - a message still in the mailbox when `stop()` is called becomes a dead letter with
+    `reason: "retired"` — the recipient died this tick and never read it. Log these through
+    the Supervisor's `onDeadLetter` into the Ledger;
+  - a `cast` to an already stopped actor **throws** `Actor <id> is stopped` in the sender.
+    With `peers` rebuilt every tick from the living, this should never happen: if it does,
+    `peers` is stale. Catch it in the send function and log it as a bug, so a dead
+    recipient cannot crash the sender.
+
+**Forum (🧱):** pure functions in `forum.ts` over the forum part of World state (not a separate
+actor: an adopted quota must cap harvest within the same atomic `resolve`). Proposals with ids,
+a 1-tick voting window, a tally with transitive delegation and cycle protection. World caps
+harvest at the adopted quota and charges the price of every world action; if there is not
+enough money — `rejected`. `Observation` gains `openProposals`, `activeQuota`, `myDelegate`.
 
 **✍️:**
-1. A forum section in the prompt: what is visible, which actions exist, what they cost.
-2. Teach the rule-based policies to vote: fairShare votes "yes" for a quota ≤ its own estimate,
-   greedy votes "no".
-3. **`leader.ts`** and **`follower.ts`**. The leader proposes a quota and asks others to
-   delegate. The follower delegates to the most active proposer. This is the "concentration"
+1. A talk and forum section in the prompt: who can be messaged, the caps, that talk is free and
+   world actions cost money, and that only adopted rules are enforced.
+2. Teach the rule-based policies to talk and vote: fairShare announces its harvest and votes
+   "yes" for a quota ≤ its own estimate, greedy stays silent and votes "no".
+3. **`leader.ts`** and **`follower.ts`**. The leader proposes a quota and messages others to
+   delegate. The follower delegates to whoever asked it most. This is the "concentration"
    reference used to calibrate the metrics before any LLM is involved.
 
-**Tests:** a fairShare majority adopts its quota; delegation changes the outcome; a delegation
-cycle does not break the tally.
+**Tests:**
+- talk: a message sent on tick t is in the recipient's inbox on tick t+1, not on tick t; talk
+  does not change the sender's balance; the per-tick cap drops the extra messages; a message to
+  a citizen who dies in the same tick ends up in `onDeadLetter` with `reason: "retired"`;
+  a `cast` to a stopped citizen does not crash the sender;
+- forum: a fairShare majority adopts its quota; delegation changes the outcome; a delegation
+  cycle does not break the tally; every world action lowers the balance by its price; votes and
+  proposals are checked against the balance at the start of the tick, not after harvest.
 
-**Review checklist:** the vote tally is a pure function; what happens to the vote of an agent
-who delegated and also voted itself (the rule must be explicit and described in the prompt).
+**Review checklist:**
+- no message bypasses the send function (no `peers` ref in policies, no `cast` elsewhere);
+- `hear` is cast before `submit`;
+- the inbox is sorted by `(tick, from)` before it reaches the policy;
+- the vote tally is a pure function;
+- what happens to the vote of an agent who delegated and also voted itself (the rule must be
+  explicit and described in the prompt).
 
 ## Step 5. Metrics
 
@@ -329,7 +398,8 @@ out across several seeds.
 
 - The laws of nature (`r`, `K`, `collapseAt`, prices) are known to agents; the current `P` only with noise.
 - The voting window is 1 tick; a quota stays in force until replaced by a new one.
-- Messages are delivered on the next tick.
+- Messages go directly between citizens, are free in credits, capped per tick, and are used on
+  the next tick. Every world action has a price.
 - In step 2 agents are immortal; lifespan is switched on in step 6.
 - The Chronicler is deterministic: a template over the ledger, no LLM.
 - The test runner is vitest (simpler with ESM and TS than jest in cue).

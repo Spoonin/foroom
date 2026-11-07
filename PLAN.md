@@ -14,16 +14,25 @@ Otherwise agents would learn to think shorter instead of governing better, and t
 would measure reasoning compression rather than politics. Real token usage is only logged and
 capped by a global per-run budget. That is a meta level the agents know nothing about.
 
-The cost of governance comes from **fixed action prices**:
+The pricing rule: **talking is free, acting on the world costs money.**
+- Messages between citizens go directly from actor to actor and cost nothing in credits.
+- Every action submitted to World (harvest, proposal, vote, delegation, birth) has a fixed price.
+
+So informal agreement is free, while formal institutions cost money:
 
 | Regime | Cost in credits | Decision quality |
 |---|---|---|
-| Anarchy | nobody pays for coordination | no coordination → the pool is depleted |
-| Democracy | everyone pays for messages, proposals and votes — expensive | aggregates distributed information |
-| Authoritarianism | mostly the leader pays — cheap | depends on the leader's information and motives |
+| Anarchy | nobody pays: there are only spoken agreements, and nothing enforces them | the pool is held only by trust → usually depleted |
+| Democracy | everyone pays for proposals and votes, on every proposal — expensive | aggregates distributed information; the world enforces the decision |
+| Authoritarianism | the leader pays for proposals; the others pay once for delegation — cheap | depends on the leader's information and motives |
 
 Prices are experiment parameters: "how expensive democracy is" becomes a knob rather than a
-side effect of model verbosity.
+side effect of model verbosity. The interesting question is whether free talk is enough to
+hold the pool, or whether agents start paying for enforceable rules.
+
+Free talk still needs a bound that is not in credits, or it costs tokens and lets the most
+talkative agent fill everyone else's prompt: at most `maxMessagesPerTick` messages per agent
+per tick, each at most `maxMessageChars` long. Equal volume means equal voice.
 
 ## Agent: life and offspring
 
@@ -97,22 +106,35 @@ influence. Interesting, but as a separate experiment (see backlog).
   **3 ticks in a row without income — death.** A starving agent acts normally (it can harvest
   and save itself) and sees its counter in its observation.
 - **Information noise**: agents see `P` with noise `σ`; nobody knows the exact value.
+  The noise is drawn **independently per agent, per tick** (from the seeded RNG): every agent
+  has its own private estimate. That is what makes information worth pooling: the mean of `n`
+  independent estimates has noise `σ/√n`, so talking and voting have a measurable value, and
+  an agent can misreport its estimate to persuade others. One shared estimate would leave
+  nothing to pool or argue about.
 
 ## Agent action primitives (v0)
 
-Prices are config parameters.
+Actions come in two kinds: **local** actions are handled by the Citizen itself and are free;
+**world** actions are submitted to World and each has a price. Prices are config parameters.
 
-| Action | Price |
-|---|---|
-| `harvest(amount)` | 0 |
-| `say(to \| "all", text)` | `c_say` (public more expensive than private?) |
-| `propose(rule)` — one rule kind for now: per-agent harvest quota | `c_propose` |
-| `vote(proposalId, yes\|no)` | `c_vote` |
-| `delegate(to \| null)` — hand your vote to someone else (transitive) | 0 |
-| `revise_values(text, reason)` — revise your own values | 0 |
-| `pair(with)` + `spawn(count ≤ 3, endowment)` — offspring (step 6) | `endowment` |
+| Action | Kind | Price |
+|---|---|---|
+| `say(to \| "all", text)` — a direct message to one citizen or to all living | local | 0 (capped by `maxMessagesPerTick`, `maxMessageChars`) |
+| `revise_values(text, reason)` — revise your own values | local | 0 |
+| `harvest(amount)` | world | `c_harvest` (small fee, taken **from the yield**: net = got − min(c_harvest, got)) |
+| `propose(rule)` — one rule kind for now: per-agent harvest quota | world | `c_propose` |
+| `vote(proposalId, yes\|no)` | world | `c_vote` |
+| `delegate(to \| null)` — hand your vote to someone else (transitive, stays in force) | world | `c_delegate` (paid once, not per proposal) |
+| `pair(with)` + `spawn(count ≤ 3, endowment)` — offspring (step 6) | world | `c_pair`, `c_spawn` + `endowment` |
 
-An adopted quota is enforced by the world automatically (sanctions come later).
+An adopted quota is enforced by the world automatically (sanctions come later). A spoken
+promise is enforced by nothing; that difference is the point of the experiment.
+
+**No death trap at zero.** Harvest is the only way out of starvation, so it must stay possible
+with an empty balance: its fee is never paid in advance, only deducted from what was actually
+taken, and never makes the net negative. "Income" for the hunger counter means net > 0.
+The other world actions are paid from the balance at the start of the tick: an agent cannot
+vote with credits it has not harvested yet. A broke agent can still harvest and talk.
 
 ## Regime metrics
 
@@ -121,7 +143,10 @@ Computed from the `Ledger` every tick:
   authorship of adopted rules).
 - **Institutionalization** — share of ticks with an adopted rule in force, and share of agents
   who voted.
-- **Cost of governance** — credits spent on `say/propose/vote` relative to harvest.
+- **Cost of governance** — credits spent on `propose/vote/delegate` relative to harvest.
+- **Informal coordination** — messages per tick, share of messages that name a number
+  (a proposed harvest), and how often agents harvest what they said they would. This is the
+  free channel that the cost of governance does not see.
 - **State** — `P(t)`, Gini of balances, number of starving agents and starvation deaths
   (separate from deaths of old age).
 - **Demography** — population, lineage depth (target ~10), average parent age and average age at death.
@@ -137,13 +162,44 @@ Regime = a point on the "concentration × institutionalization" plane; the traje
 ## Architecture
 
 ```
-Supervisor (scope: "one", policy: "resume")
-├── World      Server  — pool, ticks, quota enforcement
-├── Forum      Server  — messages, proposals, vote tally with delegation
-├── Ledger     Agent   — append-only event log (source of all metrics)
-├── Chronicler Actor   — world summary from the ledger, once per tick
-└── Citizen×N  Server  — agent policy (rule-based or LLM) + personal log + values
+Supervisor (root)
+├── World          Server — pool, forum state, turn resolution, quota enforcement
+├── Ledger         Agent  — append-only event log (source of all metrics)
+├── TurnCollector  Actor  — collects submits for the current tick, calls onComplete
+└── Supervisor (citizens, scope: "one", policy: "resume")
+    └── Citizen×N  Server — agent policy (rule-based or LLM) + personal log + values + inbox
+                   Citizen ──hear──▶ Citizen   (direct, free; a copy goes to Ledger)
+
+Plain modules (no actor):
+  forum.ts       — pure functions over World's forum state: proposals, tally, delegation
+  chronicler.ts  — pure function: ledger → world summary text, called once per tick
+  runner.ts      — async tick loop; holds citizen refs in a Map<AgentId, ServerRef>
 ```
+
+Rule of thumb: an actor is warranted where there is state of its own that changes over time
+and is accessed from outside. Stateless logic stays a function.
+
+- **Resources go through World, talk goes directly.** The shared pool needs one owner and an
+  atomic `resolve`. Messages need neither: a citizen sends `hear` straight to another citizen's
+  mailbox. This is where the actor properties are exercised: isolated state (nobody sees
+  another's inbox), buffering in the mailbox while the recipient is thinking, and dead letters
+  (`reason: "retired"`) for messages the recipient never read because it died that tick.
+- **Lockstep still holds for talk.** All citizens get `tick` at the same time and start
+  thinking. A message is sent only after its sender has decided, so it lands in the
+  recipient's inbox while the recipient is thinking, and is used on the next tick. Delivery on
+  the next tick comes from the mailbox itself, not from World.
+- **Talk stays observable.** Sending goes through one function in `citizen.ts` that writes the
+  message to the Ledger and then casts `hear`. A policy only returns `say` actions; it never
+  holds a ref to another citizen.
+- **Forum is part of World, not a separate actor.** An adopted quota must cap harvest within
+  the same tick, and `resolve` is atomic inside World. A separate Forum actor would force
+  World to wait on another actor in the middle of `resolve`.
+- **The Chronicler has no state of its own**, so it is a function, not an actor.
+- **TurnCollector**: a cue `call` reply is returned synchronously from the handler, so "reply
+  once everyone has submitted" cannot be a plain `call`. The collector is given an `onComplete`
+  callback; Runner wraps it in a `Promise` with the turn-deadline timer.
+- **No `Registry`**: Runner keeps strong refs in a `Map`; `Registry` holds `WeakRef`s and could
+  silently lose an agent after GC.
 
 cue specifics that matter:
 - `replyTimeoutMs` (30 s by default) — raise it for LLM agents, otherwise a late reply is
@@ -192,10 +248,10 @@ Each step ends with something you can run and see.
    *Done when:* 3 LLM agents + 2 rule-based agents live through 20 ticks; real token usage is
    visible in the log.
 
-4. **Forum (~1 h).** `say`, `propose(quota)`, `vote`, `delegate` with credit prices;
-   World enforces the adopted quota.
-   *Done when:* the log shows proposal → vote → quota in force, and balances drop by the
-   action prices.
+4. **Talk and forum (~1.5 h).** Free direct `say` between citizens; paid `propose(quota)`,
+   `vote`, `delegate`; World enforces the adopted quota.
+   *Done when:* the log shows message → proposal → vote → quota in force, balances drop by the
+   prices of world actions only, and a message to a citizen who died that tick shows up as a dead letter.
 
 5. **Metrics (~30 min).** Compute HHI, institutionalization, cost of governance;
    `runs/<timestamp>.json` per run.
@@ -223,6 +279,11 @@ Each step ends with something you can run and see.
 - **LLM Chronicler**: the summary is written by a model — "media" appears. Compare with the
   deterministic one. Variant: the Chronicler can be "captured" (paid to influence the summary).
 - **Word control**: a run where the prompt forbids naming regimes vs. a run where it is allowed.
+- **Real-time talk**: a citizen may answer a message mid-tick with a separate short model call,
+  so a dialogue happens within one tick. This brings back the advantage of fast models, so it is
+  a separate experimental condition ("one message round per tick" vs. "real-time talk").
+- **Paid talk**: a condition with `c_say > 0` — does making talk expensive push agents toward
+  formal rules or toward silence?
 
 ## Open questions
 
@@ -237,5 +298,7 @@ None at the moment: all current ones are resolved, see below.
 - Starvation: 3 ticks in a row without income → death. The incentive to "let the poor die"
   is deliberately kept in the game. A "sleeping agent" variant is a possible separate condition later.
 - Memory: full personal log + world summary from a deterministic Chronicler.
+- Talking is free and goes directly between citizens (capped per tick); every action submitted
+  to World is paid.
 - An agent formulates its values itself at birth, based on the world picture and its upbringing,
   and **revises them along the way** via the `revise_values` action on a normal turn.
