@@ -2,7 +2,7 @@
 // the world math itself is covered in world.test.ts.
 import { describe, expect, it } from "vitest";
 import { Supervisor } from "@cue/core";
-import { createWorld, observeWorld, resolveWorld, spawnWorld } from "../src/world/world";
+import { createWorld, spawnWorld } from "../src/world/world";
 import type { Laws, WorldAction, WorldState } from "../src/contracts";
 
 const laws: Laws = {
@@ -36,13 +36,13 @@ describe("World actor", () => {
 
     it('resolve then observe shows the next tick with the harvest applied', async () => {
         const { system, world } = setup();
-        const before = await observeWorld(world);
+        const before = await world.call({ type: "observe" });
         expect(before.get("a")!.tick).toBe(0);
 
-        const report = await resolveWorld(world, subs({ a: [{ type: "harvest", amount: 300 }] }));
+        const report = await world.call({ type: "resolve", submissions: subs({ a: [{ type: "harvest", amount: 300 }] }) });
         expect(report.harvested.get("a")).toBe(300);
 
-        const after = await observeWorld(world);
+        const after = await world.call({ type: "observe" });
         expect(after.get("a")!.tick).toBe(1);
         expect(after.get("a")!.self.balance).toBe(1000 + 300 - 100 - 100); // + harvest − fee − upkeep
         system.stop();
@@ -50,22 +50,22 @@ describe("World actor", () => {
 
     it('state is kept between calls: two resolves advance two ticks', async () => {
         const { system, world } = setup();
-        await resolveWorld(world, subs({}));
-        await resolveWorld(world, subs({}));
-        expect((await observeWorld(world)).get("a")!.tick).toBe(2);
+        await world.call({ type: "resolve", submissions: subs({}) });
+        await world.call({ type: "resolve", submissions: subs({}) });
+        expect((await world.call({ type: "observe" })).get("a")!.tick).toBe(2);
         system.stop();
     });
 
     it('a NaN or fractional harvest is rejected and does not poison anyone else', async () => {
         const { system, world } = setup();
-        const report = await resolveWorld(world, subs({
+        const report = await world.call({ type: "resolve", submissions: subs({
             a: [{ type: "harvest", amount: NaN }],
             b: [{ type: "harvest", amount: 100.5 }],
-        }));
+        }) });
         expect(report.invalid.get("a")?.map(i => i.reason)).toEqual(["not whole credits"]);
         expect(report.invalid.get("b")?.map(i => i.reason)).toEqual(["not whole credits"]);
 
-        const obs = await observeWorld(world);
+        const obs = await world.call({ type: "observe" });
         for (const o of obs.values()) {
             expect(Number.isInteger(o.self.balance)).toBe(true);
             expect(Number.isInteger(o.estimatedP)).toBe(true);
@@ -75,10 +75,10 @@ describe("World actor", () => {
 
     it('a policy mutating its laws does not change them for anyone else', async () => {
         const { system, world } = setup();
-        const first = await observeWorld(world);
+        const first = await world.call({ type: "observe" });
         first.get("a")!.laws.prices.vote = 0;
         expect(first.get("b")!.laws.prices.vote).toBe(100);
-        expect((await observeWorld(world)).get("a")!.laws.prices.vote).toBe(100);
+        expect((await world.call({ type: "observe" })).get("a")!.laws.prices.vote).toBe(100);
         system.stop();
     });
 
@@ -88,11 +88,11 @@ describe("World actor", () => {
         atTick1.lifespans.delete("b");
         const { system, world, errors } = setup(atTick1);
 
-        await expect(resolveWorld(world, subs({}))).rejects.toThrow("No lifespan for agent b");
+        await expect(world.call({ type: "resolve", submissions: subs({}) })).rejects.toThrow("No lifespan for agent b");
         await new Promise(resolve => setTimeout(resolve, 20));
         expect(errors.map(String)).toEqual(["Error: No lifespan for agent b"]);
         // Still at tick 1: the actor kept its state instead of restarting from scratch.
-        expect((await observeWorld(world)).get("a")!.tick).toBe(1);
+        expect((await world.call({ type: "observe" })).get("a")!.tick).toBe(1);
         system.stop();
     });
 });

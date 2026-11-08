@@ -333,16 +333,3 @@ export function spawnWorld(system: Supervisor, initialState: WorldState, laws: R
         },
     });
 }
-
-// Typed wrappers for calls to the World. cue's ServerRef.call cannot infer which message was sent
-// (it would have to infer through Omit<M, "reply">), so its reply type is the union of all replies.
-// These pin each reply to its message.
-type Call<T extends WorldMsg["type"]> = Extract<WorldMsg, { type: T }>;
-
-export function observeWorld(world: ServerRef<WorldMsg>): Promise<Map<AgentId, Observation>> {
-    return world.call<Call<"observe">>({ type: "observe" });
-}
-
-export function resolveWorld(world: ServerRef<WorldMsg>, submissions: Map<AgentId, WorldAction[]>): Promise<Report> {
-    return world.call<Call<"resolve">>({ type: "resolve", submissions });
-}
