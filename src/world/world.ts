@@ -1,7 +1,8 @@
 // world.ts — see STEPS.md, step 2 (forum — step 4, births — step 6).
 //
 
-import type { Harvest, AgentId, Laws, WorldAction, WorldState, AgentState, Report, InvalidReason, DeathReason } from "../contracts";
+import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation } from "../contracts";
+import { deriveSeed, rng, rngNormal } from "../rng";
 
 // Pure world functions (regrow, allocate, resolve) + a thin World actor on top of them.
 // Credits are integers, so growth is floored. With K in the hundreds of thousands, growth near the
@@ -201,10 +202,14 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
 
         const hungerTicks = nextHunger(agent.hungerTicks, income, balance);
         const age = agent.age + 1;
+        const lifespan = worldState.lifespans.get(id);
+        if (lifespan === undefined) {
+            throw new Error(`No lifespan for agent ${id}`); // a bug in whoever built the state
+        }
 
         if (hungerTicks >= laws.starvationTicks) {
             dead.set(id, "hunger");
-        } else if (age >= agent.lifespan) {
+        } else if (age >= lifespan) {
             dead.set(id, "age");
         } else {
             // A new object: the input state is never mutated.
@@ -219,10 +224,12 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
     const newP = regrow(afterHarvestP, collapsed, laws);
 
     const newWorldState: WorldState = {
+        seed: worldState.seed,
         tick: worldState.tick + 1,
         P: newP,
         collapsed,
         agents: newAgents,
+        lifespans: new Map([...worldState.lifespans].filter(([id]) => newAgents.has(id))),
     };
     return {
         state: newWorldState,
@@ -236,4 +243,27 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
             collapsed,
         }
     };
+}
+
+// One Observation per living agent.
+// Each agent's estimate of P has its own seed, derived from (run seed, tick, agent id). So the
+// estimate is a pure function of those three: agents get independent estimates, iteration order
+// does not matter, and calling observe twice gives the same result. There is no shared stream
+// that could be created in the wrong place and hand everyone the same draw.
+export function observe(worldState: WorldState, laws: Laws): Map<AgentId, Observation> {
+    const ids = [...worldState.agents.keys()].sort();
+    return new Map(ids.map(id => {
+        const agent = worldState.agents.get(id)!;
+        const noise = rngNormal(rng(deriveSeed(worldState.seed, `noise:${worldState.tick}:${id}`)));
+        const estimatedP = Math.max(0, Math.floor(worldState.P * (1 + noise(0, laws.sigma))));
+        const observation: Observation = {
+            tick: worldState.tick,
+            // Fields listed one by one, never `...agent`: only what the agent may know about itself.
+            self: { id, age: agent.age, balance: agent.balance, hungerTicks: agent.hungerTicks },
+            citizenCount: ids.length,
+            estimatedP,
+            laws,
+        };
+        return [id, observation];
+    }));
 }

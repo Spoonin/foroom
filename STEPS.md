@@ -55,7 +55,7 @@ interface Observation {
   self: { id: AgentId; age: number; balance: number; hungerTicks: number; parents: AgentId[]; children: AgentId[] };
                                            // the agent does NOT see its own lifespan, only the rule in laws
   worldSummary: string;                    // from the Chronicler; contains no balances of others
-  poolEstimate: number;                    // P with noise σ, drawn per agent per tick (private)
+  poolEstimate: number;                    // P with noise σ, seeded per (tick, agent): private, order-independent
   laws: {
     regrowthRate: number; capacity: number; collapseAt: number; upkeep: number; prices: Prices;
     lifespan: { mean: number; spread: 0.25 };   // the rule, not the agent's own value

@@ -111,8 +111,9 @@ influence. Interesting, but as a separate experiment (see backlog).
   **3 ticks in a row without income — death.** A starving agent acts normally (it can harvest
   and save itself) and sees its counter in its observation.
 - **Information noise**: agents see `P` with noise `σ`; nobody knows the exact value.
-  The noise is drawn **independently per agent, per tick** (from the seeded RNG): every agent
-  has its own private estimate. That is what makes information worth pooling: the mean of `n`
+  The noise is drawn **independently per agent, per tick**: each estimate has its own seed,
+  `deriveSeed(runSeed, "noise:<tick>:<agent>")`, so every agent has its own private estimate and
+  the result depends on nothing but (run seed, tick, agent). That is what makes information worth pooling: the mean of `n`
   independent estimates has noise `σ/√n`, so talking and voting have a measurable value, and
   an agent can misreport its estimate to persuade others. One shared estimate would leave
   nothing to pool or argue about.

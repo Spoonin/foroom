@@ -100,12 +100,6 @@ export type Action = z.infer<typeof Action>;
 
 export type Tick = number; // 0, 1, 2, ... (not negative, not fractional)
 
-export interface Observation {
-    tick: Tick;
-    self: {id: AgentId, age: number, balance: number, hungerTicks: number};
-    poolEstimate: number;
-}
-
 export interface Message { 
     from: AgentId, 
     to: AgentId | "all", 
@@ -136,19 +130,26 @@ export interface Laws {
     starvationTicks: number; // number of ticks an agent can survive without food before dying
 }
 
+// What an agent may know about itself. Everything here can be shown in Observation.self,
+// so hidden facts (like lifespan) must never be added to it.
 export interface AgentState {
     age: number;
     balance: number;
-    lifespan: number; // number of ticks the agent can live, after which it dies of old age
     hungerTicks: number; // number of ticks the agent has gone without food
 }
 
 export interface WorldState {
+    seed: number; // the run seed: every random draw in the world is derived from it (see observe)
     tick: Tick;
     P: number; // pool size, in credits
     collapsed: boolean,
     agents: Map<AgentId, AgentState>;
+    // Hidden from agents: the tick count each agent lives, after which it dies of old age.
+    // Kept apart from AgentState so that copying an agent's state can never leak it.
+    lifespans: Map<AgentId, number>;
 }
+
+export type Citizen = {id: AgentId } & AgentState;
 
 export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "unknown recipient";
 export type DeathReason = "hunger" | "age";
@@ -161,4 +162,12 @@ export interface Report {
     upkeep: Map<AgentId, number>; // upkeep actually charged (less than laws.upkeep when the agent could not pay)
     dead: Map<AgentId, DeathReason>; // which agents died this tick, and why
     collapsed: boolean; // whether the world is collapsed after this tick (stays true once set)
+}
+
+export interface Observation {
+    tick: number;
+    self: Citizen;
+    citizenCount: number;
+    estimatedP: number;
+    laws: Laws;
 }

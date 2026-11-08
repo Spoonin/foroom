@@ -1,6 +1,6 @@
 import { it, expect } from "vitest";
-import { regrow, allocate, resolve, netHarvest } from "../src/world/world";
-import type { WorldAction } from "../src/contracts";
+import { regrow, allocate, resolve, netHarvest, observe } from "../src/world/world";
+import type { WorldAction, WorldState } from "../src/contracts";
 
 it('grows the world tick by logistics law', () => {
     const P = 500;
@@ -99,13 +99,15 @@ const laws = Object.freeze({
 
 it('resolves world state correctly with valid actions', () => {
     const worldState = {
+        seed: 1,
         tick: 0,
         P: 1000,
         collapsed: false,
         agents: new Map([
-            ["agent1", { age: 1, balance: 100, lifespan: 10, hungerTicks: 0 }],
-            ["agent2", { age: 1, balance: 100, lifespan: 10, hungerTicks: 0 }]
-        ])
+            ["agent1", { age: 1, balance: 100, hungerTicks: 0 }],
+            ["agent2", { age: 1, balance: 100, hungerTicks: 0 }]
+        ]),
+        lifespans: new Map([["agent1", 10], ["agent2", 10]]),
     };
 
     const submissions = new Map([
@@ -121,13 +123,15 @@ it('resolves world state correctly with valid actions', () => {
 
 it('agent with insufficient funds can harvest', () => {
     const worldState = {
+        seed: 1,
         tick: 0,
         P: 1000,
         collapsed: false,
         agents: new Map([
-            ["poor", { age: 1, balance: 0, lifespan: 10, hungerTicks: 0 }],
-            ["rich", { age: 1, balance: 100, lifespan: 10, hungerTicks: 0 }]
-        ])
+            ["poor", { age: 1, balance: 0, hungerTicks: 0 }],
+            ["rich", { age: 1, balance: 100, hungerTicks: 0 }]
+        ]),
+        lifespans: new Map([["poor", 10], ["rich", 10]]),
     };
 
     const submissions = new Map([
@@ -145,13 +149,15 @@ it('agent with insufficient funds can harvest', () => {
 
 it('agent dies after 3 ticks of hunger', () => {
     const worldState = {
+        seed: 1,
         tick: 10,
         P: 0,
         collapsed: true,
         agents: new Map([
-            ["poor", { age: 1, balance: 0, lifespan: 10, hungerTicks: 0 }],
-            ["rich", { age: 1, balance: 100, lifespan: 10, hungerTicks: 0 }]
+            ["poor", { age: 1, balance: 0, hungerTicks: 0 }],
+            ["rich", { age: 1, balance: 100, hungerTicks: 0 }]
         ]),
+        lifespans: new Map([["poor", 10], ["rich", 10]]),
     };
 
     const submissions = new Map([
@@ -173,9 +179,12 @@ it('agent dies after 3 ticks of hunger', () => {
 });
 // ---- resolve: regressions found by probing (each of these failed before the fix) ----------------
 
-const agent = (balance: number, hungerTicks = 0) => ({ age: 1, balance, lifespan: 100, hungerTicks });
-const world = (P: number, agents: Record<string, ReturnType<typeof agent>>, collapsed = false) =>
-    ({ tick: 0, P, collapsed, agents: new Map(Object.entries(agents)) });
+const agent = (balance: number, hungerTicks = 0) => ({ age: 1, balance, hungerTicks });
+const world = (P: number, agents: Record<string, ReturnType<typeof agent>>, collapsed = false): WorldState => ({
+    seed: 1, tick: 0, P, collapsed,
+    agents: new Map(Object.entries(agents)),
+    lifespans: new Map(Object.keys(agents).map(id => [id, 100])),
+});
 const subs = (m: Record<string, WorldAction[]>) => new Map(Object.entries(m));
 
 it('a broke agent pays the harvest fee from the yield, then upkeep', () => {
@@ -275,4 +284,70 @@ it('resolve keeps P and every balance whole after a scarce, uneven split', () =>
     }), laws);
     expect(Number.isInteger(state.P)).toBe(true);
     for (const a of state.agents.values()) expect(Number.isInteger(a.balance)).toBe(true);
+});
+
+// ---- old age ------------------------------------------------------------------------------------
+
+it('an agent dies of old age when its age reaches its lifespan, and its lifespan is dropped', () => {
+    const state = world(500, { old: agent(1000), young: agent(1000) });
+    state.lifespans.set("old", 2); // age 1 → 2 this tick
+    const { state: next, report } = resolve(state, subs({}), laws);
+    expect(report.dead.get("old")).toBe("age");
+    expect(next.agents.has("old")).toBe(false);
+    expect(next.lifespans.has("old")).toBe(false);
+    expect(next.lifespans.get("young")).toBe(100);
+});
+
+// ---- observe ------------------------------------------------------------------------------------
+
+const observed = (P: number, ids: string[], seed = 1, tick = 0): WorldState => ({
+    ...world(P, Object.fromEntries(ids.map(id => [id, agent(10)]))), seed, tick,
+});
+
+it('observe gives each agent a whole, non-negative estimate close to P', () => {
+    for (const obs of observe(observed(50_000, ["a", "b", "c"]), laws).values()) {
+        expect(Number.isInteger(obs.estimatedP)).toBe(true);
+        expect(obs.estimatedP).toBeGreaterThan(50_000 * 0.7);
+        expect(obs.estimatedP).toBeLessThan(50_000 * 1.3);
+    }
+});
+
+it('agents in the same tick get different estimates', () => {
+    const estimates = [...observe(observed(50_000, ["a", "b", "c"]), laws).values()].map(o => o.estimatedP);
+    expect(new Set(estimates).size).toBe(3);
+});
+
+it('an agent gets a new estimate every tick', () => {
+    const t0 = observe(observed(50_000, ["a"], 1, 0), laws).get("a")!.estimatedP;
+    const t1 = observe(observed(50_000, ["a"], 1, 1), laws).get("a")!.estimatedP;
+    expect(t0).not.toBe(t1);
+});
+
+it('estimates depend only on (seed, tick, agent), not on the order agents were added', () => {
+    const forward = observe(observed(50_000, ["a", "b", "c"]), laws);
+    const backward = observe(observed(50_000, ["c", "b", "a"]), laws);
+    for (const id of ["a", "b", "c"]) {
+        expect(backward.get(id)!.estimatedP).toBe(forward.get(id)!.estimatedP);
+    }
+});
+
+it('a different run seed gives different estimates', () => {
+    const one = observe(observed(50_000, ["a"], 1), laws).get("a")!.estimatedP;
+    const two = observe(observed(50_000, ["a"], 2), laws).get("a")!.estimatedP;
+    expect(one).not.toBe(two);
+});
+
+it('observe shows the agent its own state, but not its lifespan or the exact P', () => {
+    const state = observed(50_000, ["a"]);
+    const obs = observe(state, laws).get("a")!;
+    expect(obs.self).toEqual({ id: "a", age: 1, balance: 10, hungerTicks: 0 });
+    expect(obs.self).not.toHaveProperty("lifespan");
+    expect(obs).not.toHaveProperty("lifespan");
+    expect(obs).not.toHaveProperty("P");
+});
+
+it('dead agents get no observation', () => {
+    const { state } = resolve(observed(50_000, ["a", "b"]), subs({}), laws);
+    state.agents.delete("b");
+    expect([...observe(state, laws).keys()]).toEqual(["a"]);
 });
