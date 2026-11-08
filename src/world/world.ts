@@ -257,6 +257,8 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
     return {
         state: newWorldState,
         report: {
+            tick: worldState.tick,
+            P: newP,
             invalid,
             charges,
             harvested: grossHarvests,

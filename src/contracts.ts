@@ -154,7 +154,11 @@ export type Citizen = {id: AgentId } & AgentState;
 export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "not whole credits" | "unknown recipient";
 export type DeathReason = "hunger" | "age";
 
+// What World tells Runner after a tick. Runner is an observer, not an agent, so this may contain
+// facts agents never see (the exact P). It must never be passed to a policy.
 export interface Report {
+    tick: Tick; // the tick that was resolved
+    P: number; // the exact pool after this tick (after regrowth)
     invalid: Map<AgentId, {action: WorldAction, reason: InvalidReason}[]>; // which actions were ignored this tick, and why
     charges: Map<AgentId, number>; // how much each agent paid for its actions this tick (prices + gift amounts)
     harvested: Map<AgentId, number>; // gross harvest taken from the pool, before the fee
