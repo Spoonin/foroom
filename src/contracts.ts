@@ -171,3 +171,7 @@ export interface Observation {
     estimatedP: number;
     laws: Laws;
 }
+
+export interface Policy {
+  (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
+}

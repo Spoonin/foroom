@@ -1,5 +1,11 @@
-// greedy.ts — see STEPS.md, step 2.
-//
-// Takes clearly more than its share.
+import type { Harvest, Policy } from "../../contracts";
+import { fairShareAmount, fairSharePolicy } from "./fairShare";
 
-export {};
+const GREEDYNESS_KOEFF = 3;
+
+export const greedyPolicy: Policy = (observation, inbox) => {
+
+    const fairShare = fairShareAmount(observation);
+
+    return [{type: "harvest", amount: fairShare * GREEDYNESS_KOEFF}];
+}
