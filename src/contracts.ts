@@ -151,7 +151,7 @@ export interface WorldState {
 
 export type Citizen = {id: AgentId } & AgentState;
 
-export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "unknown recipient";
+export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "not whole credits" | "unknown recipient";
 export type DeathReason = "hunger" | "age";
 
 export interface Report {

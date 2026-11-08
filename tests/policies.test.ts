@@ -1,8 +1,9 @@
 import { it, expect, describe } from "vitest";
 import { fairShareAmount, fairSharePolicy } from "../src/agents/policies/fairShare";
 import { makeRandomPolicy } from "../src/agents/policies/random";
+import { greedyPolicy, makeGreedyPolicy } from "../src/agents/policies/greedy";
 import { rng } from "../src/rng";
-import { observe, resolve } from "../src/world/world";
+import { createWorld, observe, resolve } from "../src/world/world";
 import type { Action, Laws, Observation, WorldAction, WorldState } from "../src/contracts";
 
 // The test's own laws, the same shape as config.ts: tuning config must not break these tests.
@@ -124,5 +125,28 @@ describe("random", () => {
         for (let i = 0; i < 1000; i++) {
             expect(harvestOf(policy(o, []))).toBeLessThanOrEqual(fair * 0.5);
         }
+    });
+});
+
+describe("greedy", () => {
+    const o = obs(laws.K / 2, 5);
+
+    it('takes factor × the fair share, in whole credits', () => {
+        expect(harvestOf(greedyPolicy(o, []))).toBe(3 * fairShareAmount(o));
+        expect(harvestOf(makeGreedyPolicy(2.5)(o, []))).toBe(Math.floor(2.5 * fairShareAmount(o)));
+    });
+
+    it('5 × greedy collapse the pool before tick 50', () => {
+        let state = createWorld(1, ["a", "b", "c", "d", "e"], laws);
+        let collapsedAt: number | null = null;
+        for (let t = 0; t < 50 && collapsedAt === null; t++) {
+            const submissions = new Map<string, WorldAction[]>();
+            for (const [id, o] of observe(state, laws)) {
+                submissions.set(id, greedyPolicy(o, []) as WorldAction[]);
+            }
+            state = resolve(state, submissions, laws).state;
+            if (state.collapsed) collapsedAt = t;
+        }
+        expect(collapsedAt).not.toBeNull();
     });
 });

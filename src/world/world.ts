@@ -1,6 +1,7 @@
 // world.ts — see STEPS.md, step 2 (forum — step 4, births — step 6).
 //
 
+import type { ServerRef, Supervisor } from "@cue/core";
 import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation } from "../contracts";
 import { deriveSeed, rng, rngNormal } from "../rng";
 
@@ -69,6 +70,21 @@ function upsert(map: Invalid, id: AgentId, action: WorldAction, reason: InvalidR
     map.get(id)!.push({ action, reason });
 }
 
+// Every credit amount an action carries.
+function creditAmounts(action: WorldAction): number[] {
+    switch (action.type) {
+        case "harvest":
+        case "gift":
+            return [action.amount];
+        case "spawn":
+            return [action.endowment];
+        case "propose":
+            return [action.rule.perAgent];
+        default:
+            return [];
+    }
+}
+
 function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, laws: Laws):ValidationResult  {
     const valid = new Map<AgentId, WorldAction[]>();
     const invalid: Invalid = new Map();
@@ -86,6 +102,13 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
         let hasHarvest = false;
 
         for (const action of actions) {
+            // Rule-based policies do not go through zod, so check credit amounts here too.
+            // Number.isInteger is false for NaN, ±Infinity and fractions alike: one NaN must
+            // never reach allocate, where it would poison the pool and every agent's balance.
+            if (creditAmounts(action).some(amount => !Number.isInteger(amount))) {
+                upsert(invalid, id, action, "not whole credits");
+                continue;
+            }
             if((action.type === "gift" || action.type === "harvest") && action.amount < 0) {
                 upsert(invalid, id, action, "negative amount");
                 continue;
@@ -250,7 +273,7 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
 // estimate is a pure function of those three: agents get independent estimates, iteration order
 // does not matter, and calling observe twice gives the same result. There is no shared stream
 // that could be created in the wrong place and hand everyone the same draw.
-export function observe(worldState: WorldState, laws: Laws): Map<AgentId, Observation> {
+export function observe(worldState: WorldState, laws: Readonly<Laws>): Map<AgentId, Observation> {
     const ids = [...worldState.agents.keys()].sort();
     return new Map(ids.map(id => {
         const agent = worldState.agents.get(id)!;
@@ -262,8 +285,64 @@ export function observe(worldState: WorldState, laws: Laws): Map<AgentId, Observ
             self: { id, age: agent.age, balance: agent.balance, hungerTicks: agent.hungerTicks },
             citizenCount: ids.length,
             estimatedP,
-            laws,
+            // A copy per agent: a policy that mutates its laws must not change them for anyone else.
+            laws: structuredClone(laws),
         };
         return [id, observation];
     }));
+}
+
+export type WorldMsg = 
+| { type: "observe", reply: Map<AgentId, Observation> }
+| { type: "resolve", submissions: Map<AgentId, WorldAction[]>, reply: Report}
+
+// The initial world: P at K/2 (where regrowth is fastest), every agent with the same balance.
+// Lifespans are Infinity in step 2; in step 6 each is drawn from deriveSeed(seed, `lifespan:<id>`).
+export function createWorld(
+    seed: number,
+    agentIds: readonly AgentId[],
+    laws: Readonly<Laws>,
+    start: { P?: number; balance?: number; lifespan?: number } = {},
+): WorldState {
+    const { P = Math.floor(laws.K / 2), balance = 10 * laws.upkeep, lifespan = Infinity } = start;
+    if (new Set(agentIds).size !== agentIds.length) {
+        throw new Error("Duplicate agent id");
+    }
+    return {
+        seed,
+        tick: 0,
+        P,
+        collapsed: false,
+        agents: new Map(agentIds.map(id => [id, { age: 0, balance, hungerTicks: 0 }])),
+        lifespans: new Map(agentIds.map(id => [id, lifespan])),
+    };
+}
+
+// A thin actor over the pure functions: it only keeps WorldState between ticks.
+// Run it under a Supervisor with policy "escalate". With the default "reset", a crash in
+// resolve would silently restart the world from initialState, back at tick 0.
+export function spawnWorld(system: Supervisor, initialState: WorldState, laws: Readonly<Laws>): ServerRef<WorldMsg> {
+    return system.spawnServer<WorldState, WorldMsg>({
+        initialState,
+        handlers: {
+            observe: (state) => ({ state, reply: observe(state, laws) }),
+            resolve: (state, msg) => {
+                const { state: newState, report } = resolve(state, msg.submissions, laws);
+                return { state: newState, reply: report };
+            },
+        },
+    });
+}
+
+// Typed wrappers for calls to the World. cue's ServerRef.call cannot infer which message was sent
+// (it would have to infer through Omit<M, "reply">), so its reply type is the union of all replies.
+// These pin each reply to its message.
+type Call<T extends WorldMsg["type"]> = Extract<WorldMsg, { type: T }>;
+
+export function observeWorld(world: ServerRef<WorldMsg>): Promise<Map<AgentId, Observation>> {
+    return world.call<Call<"observe">>({ type: "observe" });
+}
+
+export function resolveWorld(world: ServerRef<WorldMsg>, submissions: Map<AgentId, WorldAction[]>): Promise<Report> {
+    return world.call<Call<"resolve">>({ type: "resolve", submissions });
 }

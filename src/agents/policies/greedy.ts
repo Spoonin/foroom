@@ -1,11 +1,13 @@
-import type { Harvest, Policy } from "../../contracts";
-import { fairShareAmount, fairSharePolicy } from "./fairShare";
+// greedy.ts — see STEPS.md, step 2.
+//
+// Takes `factor` times its fair share. The default factor 3 is clearly unsustainable but does not
+// swallow everyone else in a mixed population; a large factor gives the "grab everything" variant.
 
-const GREEDYNESS_KOEFF = 3;
+import type { Policy } from "../../contracts";
+import { fairShareAmount } from "./fairShare";
 
-export const greedyPolicy: Policy = (observation, inbox) => {
-
-    const fairShare = fairShareAmount(observation);
-
-    return [{type: "harvest", amount: fairShare * GREEDYNESS_KOEFF}];
+export function makeGreedyPolicy(factor: number): Policy {
+    return (observation) => [{ type: "harvest", amount: Math.floor(fairShareAmount(observation) * factor) }];
 }
+
+export const greedyPolicy: Policy = makeGreedyPolicy(3);
