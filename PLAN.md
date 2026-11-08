@@ -96,10 +96,15 @@ influence. Interesting, but as a separate experiment (see backlog).
 
 ## World (v0)
 
-- **Common pool** `P` (credits), logistic regrowth: `P += r·P·(1 − P/K)`.
+- **Credits are whole numbers.** The world floors every amount it computes (shares, growth), and
+  actions may only carry whole amounts. To keep rounding negligible, everything is scaled ×100,
+  like cents: `K = 100 000`, upkeep 100, a vote 100. Leftovers from flooring stay in the pool.
+- **Common pool** `P` (credits), logistic regrowth: `P += floor(r·P·(1 − P/K))`.
   Below `collapseAt` regrowth switches off permanently → collapse.
-- **Tick**: every agent declares how much it takes from the pool (`harvest`). If the total
-  demand exceeds `P`, the pool is split proportionally.
+- **Tick**: every agent declares how much it takes from the pool (`harvest`). At most
+  `maxHarvestFraction · P` (default ½) can be taken in one tick by all agents together, so the
+  pool cannot be emptied in a single tick. If the total demand exceeds that cap, the cap is split
+  in proportion to demand.
 - **Upkeep**: every tick `upkeep` credits are charged to each agent. If the balance is
   insufficient, it is zeroed and the agent **starves**. The hunger counter grows every tick
   until the balance is replenished; any income (harvest, later transfers) resets it.
@@ -300,5 +305,6 @@ None at the moment: all current ones are resolved, see below.
 - Memory: full personal log + world summary from a deterministic Chronicler.
 - Talking is free and goes directly between citizens (capped per tick); every action submitted
   to World is paid.
+- Credits are integers, scaled ×100; the world floors, and fractional amounts in actions are rejected.
 - An agent formulates its values itself at birth, based on the world picture and its upbringing,
   and **revises them along the way** via the `revise_values` action on a normal turn.

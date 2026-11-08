@@ -1,5 +1,5 @@
 //mulberry32 algo Credit: https://stackoverflow.com/questions/521295/seeding-the-random-number-generator-in-javascript
-function rng(seed: number): () => number {
+export function rng(seed: number): () => number {
     return function() {
       seed = (seed + 0x6D2B79F5) | 0;
       let t = seed;
@@ -9,13 +9,13 @@ function rng(seed: number): () => number {
     }
 }
 
-function rngInt(generator: () => number): (min: number, max: number) => number {
+export function rngInt(generator: () => number): (min: number, max: number) => number {
     return function(min: number, max: number) {
         return Math.floor(generator() * (max - min + 1)) + min;
     }
 }
 
-function rngChoice<T>(generator: () => number): (choices: T[]) => T {
+export function rngChoice<T>(generator: () => number): (choices: T[]) => T {
     return function(choices: T[]) {
         if(choices.length === 0) {
             throw new Error("Cannot choose from an empty array");
@@ -27,7 +27,7 @@ function rngChoice<T>(generator: () => number): (choices: T[]) => T {
 }
 
 // normal noise, with σ (Box–Muller from two uniforms);
-function rngNormal(generator: () => number): (mean: number, stddev: number) => number {
+export function rngNormal(generator: () => number): (mean: number, stddev: number) => number {
     return function(mean: number, stddev: number) {
         let u = 0, v = 0;
         while(u === 0) u = generator(); // Converting [0,1) to (0,1)
@@ -38,7 +38,7 @@ function rngNormal(generator: () => number): (mean: number, stddev: number) => n
 }
 
 //uniform in a range, for the lifespan ε in for ex (−0.25, 0.25);
-function rngUniform(generator: () => number): (min: number, max: number) => number {
+export function rngUniform(generator: () => number): (min: number, max: number) => number {
     return function(min: number, max: number) {
         return generator() * (max - min) + min;
     }
@@ -67,8 +67,6 @@ function fnv1a(text: string): number {
 // An independent stream seed per purpose: rng(deriveSeed(runSeed, "noise")).
 // Without fmix32, multiplication only carries bits upward, so a change in a high seed bit
 // would change only the same high bit of the result.
-function deriveSeed(seed: number, label: string): number {
+export function deriveSeed(seed: number, label: string): number {
     return fmix32(fnv1a(label) ^ fmix32(seed));
 }
-
-export { rng, rngInt, rngChoice, rngNormal, rngUniform, deriveSeed };

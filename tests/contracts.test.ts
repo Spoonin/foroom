@@ -36,3 +36,7 @@ it('refuses undeclared actions', () => {
 
     expect(Action.safeParse(JSON.parse(stealActionJSON)).success).toBe(false);
 });
+it('refuses fractional credit amounts', () => {
+    expect(Action.safeParse({ type: "harvest", amount: 12.5 }).success).toBe(false);
+    expect(Action.safeParse({ type: "gift", to: "a", amount: 0.1 }).success).toBe(false);
+});

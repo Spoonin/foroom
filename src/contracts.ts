@@ -17,20 +17,25 @@ import { z } from "zod";
 export const AgentId = z.string().min(1);
 export type AgentId = z.infer<typeof AgentId>; // = string
 
+// Credits are whole numbers: the world floors every amount it computes, so agents may only ask
+// for whole amounts too. A fractional amount from an LLM is rejected, not silently rounded.
+export const Credits = z.number().int().nonnegative();
+
 // ---- World actions: submitted to World, each has a price -------------------------------------
 
 // `type` is the discriminator: z.literal("harvest") accepts exactly the string "harvest".
 // z.string() here would accept any string and break the union below.
-// TODO(you): is 0 a valid amount? (`.nonnegative()` allows it, `.positive()` does not.)
 // Note: in zod 4, z.number() already rejects NaN and ±Infinity.
 export const Harvest = z.object({
   type: z.literal("harvest"),
-  amount: z.number().nonnegative(),
+  amount: Credits,
 });
+
+export type Harvest = z.infer<typeof Harvest>;
 
 export const Propose = z.object({
   type: z.literal("propose"),
-  rule: z.object({ kind: z.literal("quota"), perAgent: z.number().nonnegative() }),
+  rule: z.object({ kind: z.literal("quota"), perAgent: Credits }),
 });
 
 export const Vote = z.object({
@@ -54,13 +59,19 @@ export const Spawn = z.object({
   type: z.literal("spawn"),
   partner: AgentId,
   count: z.union([z.literal(1), z.literal(2), z.literal(3)]), // infers 1 | 2 | 3, not number
-  endowment: z.number().nonnegative(),
+  endowment: Credits,
   upbringing: z.string(),
+});
+
+export const Gift = z.object({
+  type: z.literal("gift"),
+  to: AgentId,
+  amount: Credits,
 });
 
 // discriminatedUnion reads `type` first, then validates only the matching variant,
 // so an error says "harvest.amount is invalid" rather than "none of 6 variants matched".
-export const WorldAction = z.discriminatedUnion("type", [Harvest, Propose, Vote, Delegate, Pair, Spawn]);
+export const WorldAction = z.discriminatedUnion("type", [Harvest, Gift, Propose, Vote, Delegate, Pair, Spawn]);
 export type WorldAction = z.infer<typeof WorldAction>;
 
 // ---- Local actions: handled by Citizen itself, free ------------------------------------------
@@ -104,4 +115,50 @@ export interface Message {
 
 export interface Policy {
     (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
+}
+
+export interface Laws {
+    r: number; // growth rate
+    K: number; // carrying capacity
+    collapseAt: number; // fraction of K at which the world collapses
+    maxHarvestFraction: number; // at most this fraction of P can be harvested in one tick, by all agents together
+    sigma: number; // standard deviation of noise in growth
+    upkeep: number; // upkeep cost per agent per tick
+    prices: {
+        harvest: number;
+        gift: number;
+        propose: number;
+        vote: number;
+        delegate: number;
+        pair: number;
+        spawn: number;
+    };
+    starvationTicks: number; // number of ticks an agent can survive without food before dying
+}
+
+export interface AgentState {
+    age: number;
+    balance: number;
+    lifespan: number; // number of ticks the agent can live, after which it dies of old age
+    hungerTicks: number; // number of ticks the agent has gone without food
+}
+
+export interface WorldState {
+    tick: Tick;
+    P: number; // pool size, in credits
+    collapsed: boolean,
+    agents: Map<AgentId, AgentState>;
+}
+
+export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "unknown recipient";
+export type DeathReason = "hunger" | "age";
+
+export interface Report {
+    invalid: Map<AgentId, {action: WorldAction, reason: InvalidReason}[]>; // which actions were ignored this tick, and why
+    charges: Map<AgentId, number>; // how much each agent paid for its actions this tick (prices + gift amounts)
+    harvested: Map<AgentId, number>; // gross harvest taken from the pool, before the fee
+    received: Map<AgentId, number>; // gifts received this tick
+    upkeep: Map<AgentId, number>; // upkeep actually charged (less than laws.upkeep when the agent could not pay)
+    dead: Map<AgentId, DeathReason>; // which agents died this tick, and why
+    collapsed: boolean; // whether the world is collapsed after this tick (stays true once set)
 }
