@@ -107,8 +107,10 @@ export interface Message {
     text: string 
 }
 
+export type RunnerMsg = {type: "submit", from: AgentId, actions: WorldAction[], tick: Tick}
+
 export interface Policy {
-    (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
+    (observation: Observation, inbox: Message[]): WorldAction[] | Promise<WorldAction[]>;
 }
 
 export interface Laws {
@@ -174,8 +176,4 @@ export interface Observation {
     citizenCount: number;
     estimatedP: number;
     laws: Laws;
-}
-
-export interface Policy {
-  (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
 }
