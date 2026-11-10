@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Supervisor } from "@cue/core";
-import { spawnCitizen } from "../src/agents/citizen";
-import type { Laws, Observation, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
+import { spawnCitizen, type CitizenOptions } from "../src/agents/citizen";
+import type { Action, Laws, Observation, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
 
 const laws: Laws = {
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
@@ -47,10 +47,10 @@ const flushMicrotasks = () => new Promise(resolve => setTimeout(resolve, 0));
 let system: Supervisor;
 let crashes: unknown[];
 
-function start(policy: Policy) {
+function start(policy: Policy, options: CitizenOptions = {}) {
     crashes = [];
     system = new Supervisor({ onError: ({ error }) => { crashes.push(error); } });
-    const citizen = spawnCitizen(system, "a", policy);
+    const citizen = spawnCitizen(system, "a", policy, options);
     const collector = fakeCollector();
     const tick = (n: Tick) => citizen.cast({ type: "tick", observation: obs(n), replyTo: collector.ref });
     return { citizen, collector, tick };
@@ -81,7 +81,7 @@ describe("Citizen", () => {
         tick(3);
         await collector.received(1);
         expect(policy).toHaveBeenCalledTimes(1);
-        expect(policy).toHaveBeenCalledWith(obs(3), []);
+        expect(policy).toHaveBeenCalledWith(obs(3), [], expect.any(AbortSignal));
     });
 
     it('waits for an async policy and submits its result', async () => {
@@ -189,5 +189,66 @@ describe("Citizen", () => {
 
         const [submit] = await collector.received(1);
         expect(submit?.tick).toBe(5);
+    });
+
+    it('a policy that returns something that is not a list of actions gives a failed turn, not a crash', async () => {
+        // A glue bug: the type says Action[], the runtime disagrees.
+        const policy = vi.fn<Policy>(() => undefined as unknown as Action[]);
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        const [submit] = await collector.received(1);
+        expect(submit?.actions).toEqual([]);
+        expect(submit?.error).toMatch(/^invalid policy output: /);
+    });
+
+    it('one invalid action fails the whole turn, with the reason', async () => {
+        const policy = vi.fn<Policy>(() => [{ type: "harvest", amount: 5 }, { type: "harvest", amount: -1 }]);
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        const [submit] = await collector.received(1);
+        expect(submit?.actions).toEqual([]);
+        expect(submit?.error).toMatch(/invalid policy output: .*amount/);
+    });
+
+    it('a new tick aborts the previous call if it is still thinking', async () => {
+        const signals: AbortSignal[] = [];
+        const policy = vi.fn<Policy>((_o, _inbox, signal) => {
+            signals.push(signal!);
+            return signals.length === 1 ? new Promise(() => {}) : harvest(1); // tick 0 never answers
+        });
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        tick(1);
+        await collector.received(1);
+        expect(signals.map(s => s.aborted)).toEqual([true, false]);
+        expect(String(signals[0]?.reason)).toMatch(/superseded by tick 1/);
+    });
+
+    it('a call that already answered is not aborted by the next tick', async () => {
+        const signals: AbortSignal[] = [];
+        const policy = vi.fn<Policy>((_o, _inbox, signal) => { signals.push(signal!); return harvest(1); });
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        await collector.received(1);
+        tick(1);
+        await collector.received(2);
+        expect(signals.map(s => s.aborted)).toEqual([false, false]);
+    });
+
+    it('aborting its lifetime aborts the call in flight', async () => {
+        const lifetime = new AbortController();
+        let seen: AbortSignal | undefined;
+        const policy = vi.fn<Policy>((_o, _inbox, signal) => { seen = signal; return new Promise(() => {}); });
+        const { tick } = start(policy, { lifetime: lifetime.signal });
+
+        tick(0);
+        await vi.waitFor(() => expect(policy).toHaveBeenCalled());
+        expect(seen?.aborted).toBe(false);
+        lifetime.abort(new Error("died"));
+        expect(seen?.aborted).toBe(true);
     });
 });

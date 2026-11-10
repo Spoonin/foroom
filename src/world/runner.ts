@@ -8,14 +8,16 @@
 //   - World, Ledger and TurnCollector run under the root supervisor with "escalate". A crash in
 //     any of them is a bug that makes the run meaningless, so it fails the run.
 //   - Citizens run under one child supervisor with "resume" (scope "one", so a crash never
-//     touches the other citizens): the state is kept and the crashed message is dropped. A
-//     crashed tick then simply never submits, and shows up in the Ledger as a timeout. A dead
-//     citizen is stopped through that supervisor with stopChild.
+//     touches the other citizens): the state is kept and the crashed message is dropped. That
+//     message becomes a dead letter, which Runner records as a `crash` event, so the Ledger says
+//     why the citizen missed its turn instead of showing only a timeout.
+//   - A dead citizen is stopped through that supervisor with stopChild, after its lifetime signal
+//     is aborted so an in-flight policy call (a model request) stops too.
 
-import { Supervisor, type Crash } from "@cue/core";
+import { Supervisor, type Crash, type DeadLetter } from "@cue/core";
 import type { AgentId, Laws, Policy, Report, Tick, WorldAction } from "../contracts";
 import { laws as defaultLaws } from "../config";
-import { spawnCitizen, type CitizenRef } from "../agents/citizen";
+import { spawnCitizen, type CitizenMsg, type CitizenRef } from "../agents/citizen";
 import { createWorld, spawnWorld } from "./world";
 import { eventsFromReport, readAll, record, spawnLedger, type LedgerEvent } from "./ledger";
 import { spawnTurnCollector } from "./turnCollector";
@@ -51,24 +53,43 @@ export interface RunResult {
 
 export const DEFAULT_TURN_DEADLINE_MS = 60_000;
 
+const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 export async function runSimulation(options: RunOptions): Promise<RunResult> {
     const { seed, ticks, citizens: specs, laws = defaultLaws, start, turnDeadlineMs = DEFAULT_TURN_DEADLINE_MS, signal } = options;
 
+    // Citizen crashes, as Ledger events waiting to be recorded with the next batch.
+    const crashEvents: LedgerEvent[] = [];
+    const agentOfActor = new Map<string, AgentId>();
+
     const crashes: Crash[] = [];
-    const system = new Supervisor({ onError: (crash) => { crashes.push(crash); } }, { policy: "escalate" });
+    const system = new Supervisor(
+        { onError: (crash) => { crashes.push(crash); } },
+        {
+            policy: "escalate",
+            onDeadLetter: (letter) => {
+                const event = crashEventOf(letter, actorId => agentOfActor.get(actorId));
+                if (event) crashEvents.push(event);
+            },
+        },
+    );
     const failIfCrashed = () => {
         const [crash] = crashes;
-        if (crash) throw new Error(`${crash.childId} crashed`, { cause: crash.error });
+        if (crash) throw new Error(`${crash.origin} crashed: ${reasonOf(crash.error)}`, { cause: crash.error });
     };
+    const takeCrashEvents = () => crashEvents.splice(0).sort(byTickThenAgent);
 
     const world = spawnWorld(system, createWorld(seed, specs.map(s => s.id), laws, start), laws);
     const ledger = spawnLedger(system);
     const collector = spawnTurnCollector(system);
 
     const citizenSupervisor = system.spawnSupervisor({ policy: "resume" });
-    const citizens = new Map<AgentId, CitizenRef>();
+    const citizens = new Map<AgentId, { ref: CitizenRef; lifetime: AbortController }>();
     for (const { id, policy } of specs) {
-        citizens.set(id, spawnCitizen(citizenSupervisor, id, policy));
+        const lifetime = new AbortController();
+        const ref = spawnCitizen(citizenSupervisor, id, policy, { lifetime: lifetime.signal });
+        citizens.set(id, { ref, lifetime });
+        agentOfActor.set(ref.id, id);
     }
 
     let ticksRun = 0;
@@ -85,7 +106,7 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
                 collector.cast({ type: "open", tick, expected, onComplete: resolve });
             });
             for (const [id, observation] of observations) {
-                citizens.get(id)?.cast({ type: "tick", observation, replyTo: collector });
+                citizens.get(id)?.ref.cast({ type: "tick", observation, replyTo: collector });
             }
             await waitForTurn(complete, turnDeadlineMs, signal);
             if (signal?.aborted) break; // abandon this tick: nothing of it reaches the World or the Ledger
@@ -102,11 +123,14 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
             }
 
             const report = await world.call({ type: "resolve", submissions });
-            record(ledger, [...eventsFromReport(report), ...runnerEvents]);
+            record(ledger, [...eventsFromReport(report), ...runnerEvents, ...takeCrashEvents()]);
 
             for (const id of report.dead.keys()) {
-                const ref = citizens.get(id);
-                if (ref) citizenSupervisor.stopChild(ref);
+                const citizen = citizens.get(id);
+                if (citizen) {
+                    citizen.lifetime.abort(new Error(`${id} died`));
+                    citizenSupervisor.stopChild(citizen.ref);
+                }
                 citizens.delete(id);
             }
             collapsed = report.collapsed;
@@ -114,13 +138,32 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
             failIfCrashed();
             options.onTick?.(report);
         }
+        record(ledger, takeCrashEvents()); // crashes after the last resolved tick
         const events = await readAll(ledger);
         failIfCrashed();
         return { events, ticksRun, survivors: [...citizens.keys()].sort(), collapsed, aborted: signal?.aborted ?? false };
     } finally {
+        // Abort first, so in-flight policy calls stop, then stop the actors.
+        for (const { lifetime } of citizens.values()) lifetime.abort(new Error("the run ended"));
         system.stop();
     }
 }
+
+// A dead letter with an error is a crashed message. If it belonged to a Citizen, it becomes a
+// `crash` event, stamped with the tick the message was about (not the tick Runner is on when the
+// letter arrives, which depends on timing). Anything else (a message discarded because its actor
+// stopped, or one that is not a Citizen's) is not a crash and is ignored.
+export function crashEventOf(letter: DeadLetter, agentOf: (actorId: string) => AgentId | undefined): LedgerEvent | undefined {
+    if (letter.error === undefined) return undefined;
+    const agent = agentOf(letter.childId);
+    if (agent === undefined) return undefined;
+    const message = letter.message as CitizenMsg;
+    const tick = message.type === "tick" ? message.observation.tick : message.tick;
+    return { tick, kind: "crash", agent, reason: `${message.type} handler: ${reasonOf(letter.error)}` };
+}
+
+const byTickThenAgent = (a: LedgerEvent, b: LedgerEvent): number =>
+    a.tick - b.tick || ("agent" in a && "agent" in b ? (a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0) : 0);
 
 // Resolves when `done` resolves, after `ms`, or on abort, whichever comes first. Leaves nothing
 // behind: the timer is cleared, and the abort listener removed, because one signal can be shared by

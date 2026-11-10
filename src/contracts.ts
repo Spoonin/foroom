@@ -116,9 +116,16 @@ export type Submit = { type: "submit"; from: AgentId; tick: Tick; actions: World
 export type SubmitTarget = { cast(msg: Submit): boolean };
 
 // A policy returns world and local actions mixed; Citizen splits them.
+// `signal` aborts when the answer is no longer wanted: the next tick has started, the agent died,
+// or the run stopped. A policy that calls a model passes it on to fetch, so the request (and its
+// tokens) stops too. Rule-based policies are instant and can ignore it.
 export interface Policy {
-    (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
+    (observation: Observation, inbox: Message[], signal?: AbortSignal): Action[] | Promise<Action[]>;
 }
+
+// What Citizen accepts back from a policy, checked at runtime: the static type is a promise the
+// policy makes, not something JavaScript enforces.
+export const PolicyOutput = z.array(Action);
 
 export interface Laws {
     r: number; // growth rate

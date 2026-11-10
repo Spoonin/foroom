@@ -23,8 +23,11 @@ export type LedgerEvent =
     | { tick: Tick; kind: "death"; agent: AgentId; reason: DeathReason }
     // Written by Runner: the agent did not submit before the turn deadline.
     | { tick: Tick; kind: "timeout"; agent: AgentId }
-    // Written by Runner: the agent's policy threw or rejected, so its turn was empty.
-    | { tick: Tick; kind: "policyFailed"; agent: AgentId; reason: string };
+    // Written by Runner: the agent's policy threw, rejected or returned something invalid, so its turn was empty.
+    | { tick: Tick; kind: "policyFailed"; agent: AgentId; reason: string }
+    // Written by Runner: one of the Citizen's own handlers threw (a bug in our code, not the agent's).
+    // The Citizen keeps running; the tick usually also shows a timeout, and this says why.
+    | { tick: Tick; kind: "crash"; agent: AgentId; reason: string };
 // Later steps add kinds here: "message" (step 4), "values" (step 3), "birth" (step 6), ...
 
 export type LedgerKind = LedgerEvent["kind"];

@@ -2,7 +2,7 @@
 // policies.test.ts checks the same economics on the pure functions; this checks the wiring.
 
 import { describe, expect, it } from "vitest";
-import { runSimulation, type CitizenSpec } from "../src/world/runner";
+import { crashEventOf, runSimulation, type CitizenSpec } from "../src/world/runner";
 import { ofKind } from "../src/world/ledger";
 import { tickRows, toCsv } from "../src/metrics/timeseries";
 import { fairSharePolicy } from "../src/agents/policies/fairShare";
@@ -86,9 +86,9 @@ describe("scenarios", () => {
     it('the CSV has one row per tick, with P(t) and the population', async () => {
         const { events } = await runSimulation({ seed: 1, ticks: 3, citizens: all(fairSharePolicy), laws });
         const lines = toCsv(tickRows(events, ids.length)).trim().split("\n");
-        expect(lines[0]).toBe("tick,P,collapsed,alive,harvested,deaths,timeouts,policyFailures");
+        expect(lines[0]).toBe("tick,P,collapsed,alive,harvested,deaths,timeouts,policyFailures,crashes");
         expect(lines).toHaveLength(4);
-        expect(lines[1]).toMatch(/^0,\d+,false,5,\d+,0,0,0$/);
+        expect(lines[1]).toMatch(/^0,\d+,false,5,\d+,0,0,0,0$/);
     });
 });
 
@@ -142,5 +142,53 @@ describe("stopping a run with an AbortSignal", () => {
     it('a run that finishes on its own is not aborted', async () => {
         const { aborted } = await runSimulation({ seed: 1, ticks: 2, citizens: all(fairSharePolicy), laws });
         expect(aborted).toBe(false);
+    });
+});
+
+describe("in-flight policy calls", () => {
+    it('a citizen that dies has its call aborted at once, while the others play on', async () => {
+        // "hungry" never answers and has no savings, so it starves after starvationTicks.
+        const hungrySignals: AbortSignal[] = [];
+        const hungry: Policy = (_o, _inbox, signal) => { hungrySignals.push(signal!); return new Promise(() => {}); };
+        const abortedAtDeath: boolean[] = [];
+        const result = await runSimulation({
+            seed: 1, ticks: 6, laws, turnDeadlineMs: 20, start: { balance: 0 },
+            citizens: [{ id: "eater", policy: fairSharePolicy }, { id: "hungry", policy: hungry }],
+            onTick: (report) => { if (report.dead.has("hungry")) abortedAtDeath.push(hungrySignals.every(s => s.aborted)); },
+        });
+        expect(result.survivors).toEqual(["eater"]);
+        expect(result.ticksRun).toBe(6); // the run went on after the death
+        expect(abortedAtDeath).toEqual([true]);
+    });
+
+    it('when the run ends, every call still in flight is aborted', async () => {
+        const signals: AbortSignal[] = [];
+        const never: Policy = (_o, _inbox, signal) => { signals.push(signal!); return new Promise(() => {}); };
+        await runSimulation({ seed: 1, ticks: 2, laws, turnDeadlineMs: 10, citizens: all(never) });
+        expect(signals).toHaveLength(2 * ids.length);
+        expect(signals.every(s => s.aborted)).toBe(true);
+    });
+});
+
+describe("crashEventOf", () => {
+    const agentOf = (actorId: string) => (actorId === "server-7" ? "a" : undefined);
+    const replyTo = { cast: () => true };
+
+    it('turns a crashed Citizen message into a crash event, stamped with the tick of that message', () => {
+        const letter = { childId: "server-7", reason: "dropped" as const, error: new TypeError("x is undefined"),
+            message: { type: "policyResults", tick: 4, results: [], replyTo } };
+        expect(crashEventOf(letter, agentOf)).toEqual({ tick: 4, kind: "crash", agent: "a", reason: "policyResults handler: x is undefined" });
+    });
+
+    it('reads the tick of a crashed tick message from its observation', () => {
+        const letter = { childId: "server-7", reason: "dropped" as const, error: "boom",
+            message: { type: "tick", observation: { tick: 9 }, replyTo } };
+        expect(crashEventOf(letter, agentOf)?.tick).toBe(9);
+    });
+
+    it('ignores messages discarded without an error (their actor was stopped), and actors that are not Citizens', () => {
+        const message = { type: "policyResults", tick: 1, results: [], replyTo };
+        expect(crashEventOf({ childId: "server-7", reason: "retired", message }, agentOf)).toBeUndefined();
+        expect(crashEventOf({ childId: "agent-0", reason: "dropped", error: "boom", message }, agentOf)).toBeUndefined();
     });
 });

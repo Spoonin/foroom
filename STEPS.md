@@ -33,9 +33,10 @@ foroom/
 │   │   ├── forum.ts          🧱 pure functions (no actor): proposals, vote tally with delegation
 │   │   ├── ledger.ts         🧱 Ledger Agent: append-only event log
 │   │   ├── chronicler.ts     🧱 pure function (no actor): ledger → world summary (deterministic)
-│   │   └── runner.ts         🧱 tick loop, TurnCollector, turn deadline, spawn/stop of actors
+│   │   ├── turnCollector.ts  🧱 TurnCollector Server: gathers one tick's submits (open / submit / close)
+│   │   └── runner.ts         🧱 tick loop, turn deadline, abort, spawn/stop of actors, crash events
 │   ├── llm/                  🧱 LLMProvider + Mock / OpenAI-compatible / Anthropic + token budget
-│   ├── metrics/              🧱 concentration, institutionalization, cost of governance, demography
+│   ├── metrics/              🧱 timeseries.ts (the per-tick CSV); later concentration, institutionalization, cost of governance, demography
 │   └── agents/               ✍️ agent logic
 │       ├── citizen.ts        ✍️ the agent actor
 │       ├── policies/         ✍️ greedy.ts, fairShare.ts, random.ts, (leader.ts, follower.ts)
@@ -126,10 +127,52 @@ Talk is direct actor-to-actor messaging; World does not take part in it.
   `submit`. If every message is cast before its sender's `submit`, it is already in the
   recipient's mailbox ahead of the next `tick`. Swap the order and a message can slip one
   tick later.
-- A late answer (past the deadline) is dropped in `decided` along with its messages, so a slow
-  agent cannot speak into the next tick.
+- A late answer (past the deadline) is dropped in `policyResults` along with its messages, so a
+  slow agent cannot speak into the next tick.
 - **Sort the inbox** by `(tick, from)` before building a prompt, not by arrival order —
   otherwise the faster model's words come first.
+
+## Runner rules (decided and built in step 2)
+
+Each rule below came out of an experiment that broke it; the failure is noted so nobody
+"simplifies" the rule back.
+
+- **One clock, owned by World.** Runner takes the tick number from the observations, never
+  from its own counter. With two counters that disagree, every submit is dropped as stale:
+  all agents time out every tick, then starve, and the Ledger mixes two tick numberings. It
+  looks like agent behavior, not like a bug.
+- **Ordering from cause and effect, never from scheduling.** The collector's `open` is cast
+  before the citizens' `tick`, so it is ahead of every `submit` in the collector's mailbox
+  whatever happens in between. The reverse order works only until someone adds an `await`
+  that yields to the event loop; then every submit is dropped.
+- **One TurnCollector for the whole run**, never stopped between ticks, so a citizen's cast to
+  it never hits a stopped actor. `open {tick, expected, onComplete}` starts a tick; `close`
+  (a `call`) ends it and replies with what arrived. The first submit per agent counts;
+  submits for another tick, from an unexpected agent, or after `close` are dropped.
+- **The `close` reply is the only answer to "who submitted".** The race between `onComplete`
+  and the deadline only decides when Runner stops waiting. A submit that lands exactly at the
+  deadline is either counted or a timeout, never both.
+- **A missing submit is an empty turn plus a `timeout` event.** Upkeep is still charged:
+  being slow costs money.
+- **At most one policy call per citizen in flight.** A new tick aborts the previous call if it
+  is still thinking. Every call's signal also follows the citizen's lifetime, which Runner
+  aborts on death and at the end of the run. A model policy must pass `signal` to `fetch`,
+  or none of this saves tokens.
+- **Policy output is validated** (`PolicyOutput` in `contracts.ts`): not a list of valid
+  actions → the whole turn fails as `policyFailed` with the reason. A glue bug becomes data
+  with a cause, not a crash that only shows up as a timeout.
+- **Supervision.** World, Ledger and TurnCollector run under `escalate`: a crash fails the run.
+  Never `reset` for them: a reset Ledger crashed on tick 10 silently lost ticks 0–13 and the run
+  returned normally. Citizens run under one child supervisor with `resume` (scope `one`); a
+  crashed message becomes a dead letter, which Runner records as a `crash` event stamped with
+  the tick that message was about. A dead citizen is stopped with `stopChild`.
+- **Stopping a run:** an `AbortSignal` in `runSimulation`. It returns normally with
+  `aborted: true` and what was resolved; a tick in progress is abandoned, not resolved
+  (otherwise its unfinished agents would show up as false timeouts). One controller can stop
+  many runs; the token budget in step 3 uses it.
+- **Runner stays plain async code**, not an actor. Running many simulations is just
+  `Promise.all`. It becomes an actor only when something must talk to a running simulation
+  (pause, step, live status, a UI); then the loop turns into a state machine of messages.
 
 ## ⚠️ The key cue fact for agents (verified)
 
@@ -251,8 +294,9 @@ anywhere; `poolEstimate` differs between agents in the same tick (independent no
    Citizen replaces its values, World writes the new version to the ledger. Tests on
    `MockProvider`: the initial formulation is requested exactly once; after `revise_values` the
    next prompt contains the new version.
-6. **Rework `citizen.ts` to pipe-to-self.** Test: 5 agents with `MockProvider` (200 ms delay)
-   must finish in ~200 ms, not ~1000.
+6. **Rework `citizen.ts` to pipe-to-self.** *(Done early, in step 2, with cue's `pipeTo`. Still
+   add the timing test, and the exercise below is still worth doing in a scratch copy.)*
+   Test: 5 agents with `MockProvider` (200 ms delay) must finish in ~200 ms, not ~1000.
 
    Exercise: first try the direct variant — `.then(actions => replyTo.cast(submit))` with no
    message to self — and write two tests: (a) an agent stopped while thinking must not submit;
@@ -266,7 +310,9 @@ and the ledger shows the turns and real token usage.
 Check the network adapters with a separate manual script, not with unit tests.
 
 **Review checklist:** not a single `await` in actor handlers; keys only from `.env` (and `.env`
-is in `.gitignore`); the token budget really stops the run; the prompt contains no regime names.
+is in `.gitignore`); the token budget really stops the run (through the run's `AbortSignal`);
+the LLM policy passes its `signal` to `fetch`, so a superseded or dead agent's request stops;
+the prompt contains no regime names.
 
 ## Step 3.5 (optional). Agent on LangGraph
 

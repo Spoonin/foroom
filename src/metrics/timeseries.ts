@@ -14,6 +14,7 @@ export interface TickRow {
     deaths: number;
     timeouts: number;
     policyFailures: number;
+    crashes: number;
 }
 
 export function tickRows(events: readonly LedgerEvent[], population: number): TickRow[] {
@@ -25,6 +26,7 @@ export function tickRows(events: readonly LedgerEvent[], population: number): Ti
     const deaths = count("death");
     const timeouts = count("timeout");
     const failures = count("policyFailed");
+    const crashes = count("crash");
     const harvested = new Map<Tick, number>();
     for (const e of ofKind(events, "harvest")) harvested.set(e.tick, (harvested.get(e.tick) ?? 0) + e.gross);
 
@@ -37,11 +39,12 @@ export function tickRows(events: readonly LedgerEvent[], population: number): Ti
             deaths: deaths.get(tick) ?? 0,
             timeouts: timeouts.get(tick) ?? 0,
             policyFailures: failures.get(tick) ?? 0,
+            crashes: crashes.get(tick) ?? 0,
         };
     });
 }
 
-const COLUMNS: readonly (keyof TickRow)[] = ["tick", "P", "collapsed", "alive", "harvested", "deaths", "timeouts", "policyFailures"];
+const COLUMNS: readonly (keyof TickRow)[] = ["tick", "P", "collapsed", "alive", "harvested", "deaths", "timeouts", "policyFailures", "crashes"];
 
 // Every value is a number or a boolean, so nothing needs quoting.
 export function toCsv(rows: readonly TickRow[]): string {

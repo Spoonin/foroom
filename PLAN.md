@@ -309,3 +309,9 @@ None at the moment: all current ones are resolved, see below.
 - Credits are integers, scaled ×100; the world floors, and fractional amounts in actions are rejected.
 - An agent formulates its values itself at birth, based on the world picture and its upbringing,
   and **revises them along the way** via the `revise_values` action on a normal turn.
+- An agent that misses the turn deadline loses its turn: no actions, but upkeep is still charged.
+  A slow model is a real handicap in this world, not something the runner waits out.
+- Each agent has at most one model call in flight: a new tick cancels a call that is still
+  thinking, and death or the end of the run cancels it too.
+- An agent's broken output (invalid actions) is an empty turn, recorded with its reason. A failure
+  is data for the experiment, never a crash of the run.
