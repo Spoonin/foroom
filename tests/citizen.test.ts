@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Supervisor, type ServerRef } from "@cue/core";
+import { Supervisor } from "@cue/core";
 import { spawnCitizen } from "../src/agents/citizen";
-import type { Laws, Observation, Policy, RunnerMsg, Tick, WorldAction } from "../src/contracts";
+import type { Laws, Observation, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
 
 const laws: Laws = {
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
@@ -21,19 +21,17 @@ const harvest = (amount: number): WorldAction[] => [{ type: "harvest", amount }]
 
 // A stand-in for TurnCollector: records every submit, and lets a test wait for the n-th one.
 function fakeCollector() {
-    const submits: RunnerMsg[] = [];
+    const submits: Submit[] = [];
     const waiting: { n: number; resolve: () => void }[] = [];
-    const ref: ServerRef<RunnerMsg> = {
-        id: "collector",
+    const ref: SubmitTarget = {
         cast(msg) {
             submits.push(msg);
             for (const w of waiting.filter(w => submits.length >= w.n)) w.resolve();
             return true;
         },
-        call: () => Promise.reject(new Error("the collector has no calls")),
     };
     // Resolves once n submits have arrived. A submit that never comes times the test out.
-    const received = (n: number) => new Promise<RunnerMsg[]>(resolve => {
+    const received = (n: number) => new Promise<Submit[]>(resolve => {
         if (submits.length >= n) return resolve(submits.slice(0, n));
         waiting.push({ n, resolve: () => resolve(submits.slice(0, n)) });
     });
@@ -52,9 +50,9 @@ let crashes: unknown[];
 function start(policy: Policy) {
     crashes = [];
     system = new Supervisor({ onError: ({ error }) => { crashes.push(error); } });
-    const citizen = spawnCitizen(system, "a", policy, -1);
+    const citizen = spawnCitizen(system, "a", policy);
     const collector = fakeCollector();
-    const tick = (n: Tick) => citizen.cast({ type: "tick", tick: n, observation: obs(n), replyTo: collector.ref });
+    const tick = (n: Tick) => citizen.cast({ type: "tick", observation: obs(n), replyTo: collector.ref });
     return { citizen, collector, tick };
 }
 
@@ -95,8 +93,20 @@ describe("Citizen", () => {
         expect(submit?.actions).toEqual(harvest(7));
     });
 
-    it('a throwing policy gives an empty turn, and the next tick works again', async () => {
-        vi.spyOn(console, "error").mockImplementation(() => {});
+    it('submits only world actions: local ones (say, revise_values) stay with the Citizen', async () => {
+        const policy = vi.fn<Policy>(() => [
+            { type: "say", to: "all", text: "let's share" },
+            { type: "harvest", amount: 5 },
+            { type: "revise_values", text: "share more", reason: "the pool is shrinking" },
+        ]);
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        const [submit] = await collector.received(1);
+        expect(submit?.actions).toEqual(harvest(5));
+    });
+
+    it('a throwing policy gives an empty turn with the reason, and the next tick works again', async () => {
         const policy = vi.fn<Policy>(() => harvest(10))
             .mockImplementationOnce(() => { throw new Error("boom"); });
         const { collector, tick } = start(policy);
@@ -104,18 +114,19 @@ describe("Citizen", () => {
         tick(0);
         await collector.received(1);
         tick(1);
-        const submits = await collector.received(2);
-        expect(submits.map(s => [s.tick, s.actions])).toEqual([[0, []], [1, harvest(10)]]);
+        expect(await collector.received(2)).toEqual([
+            { type: "submit", from: "a", tick: 0, actions: [], error: "boom" },
+            { type: "submit", from: "a", tick: 1, actions: harvest(10) },
+        ]);
     });
 
-    it('a rejecting async policy gives an empty turn', async () => {
-        vi.spyOn(console, "error").mockImplementation(() => {});
+    it('a rejecting async policy gives an empty turn, whatever it rejects with', async () => {
         const policy = vi.fn<Policy>(() => Promise.reject("not even an Error"));
         const { collector, tick } = start(policy);
 
         tick(0);
         const [submit] = await collector.received(1);
-        expect(submit).toEqual({ type: "submit", from: "a", tick: 0, actions: [] });
+        expect(submit).toEqual({ type: "submit", from: "a", tick: 0, actions: [], error: "not even an Error" });
     });
 
     it('drops a result that arrives after the next tick has started', async () => {

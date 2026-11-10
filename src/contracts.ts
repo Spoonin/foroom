@@ -107,10 +107,17 @@ export interface Message {
     text: string 
 }
 
-export type RunnerMsg = {type: "submit", from: AgentId, actions: WorldAction[], tick: Tick}
+// A Citizen's answer to one tick: its world actions, sent to TurnCollector exactly once per tick.
+// `error` is set when the policy threw or rejected; the turn is then empty, and Runner records
+// the reason in the Ledger (in step 3 this is where unparseable LLM output shows up).
+export type Submit = { type: "submit"; from: AgentId; tick: Tick; actions: WorldAction[]; error?: string };
 
+// Whatever receives a Submit: TurnCollector's ref, or a plain object in tests.
+export type SubmitTarget = { cast(msg: Submit): boolean };
+
+// A policy returns world and local actions mixed; Citizen splits them.
 export interface Policy {
-    (observation: Observation, inbox: Message[]): WorldAction[] | Promise<WorldAction[]>;
+    (observation: Observation, inbox: Message[]): Action[] | Promise<Action[]>;
 }
 
 export interface Laws {
