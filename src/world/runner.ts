@@ -41,6 +41,10 @@ export interface RunOptions {
     // The run then returns normally with what it has, `aborted: true`. A tick in progress is
     // abandoned, not resolved: its unfinished agents would otherwise show up as false timeouts.
     signal?: AbortSignal;
+    // After the pool collapses, the run goes on for this many more ticks and then stops: long
+    // enough to see who survives the collapse, short of paying for a world that is already lost.
+    // Infinity runs on to `ticks`.
+    ticksAfterCollapse?: number;
 }
 
 export interface RunResult {
@@ -49,14 +53,18 @@ export interface RunResult {
     survivors: AgentId[];
     collapsed: boolean;
     aborted: boolean;
+    collapsedAt: Tick | null; // the first tick after which the pool was collapsed
+    endedBy: "ticks" | "collapse" | "extinction" | "aborted";
 }
 
 export const DEFAULT_TURN_DEADLINE_MS = 60_000;
+export const DEFAULT_TICKS_AFTER_COLLAPSE = 10;
 
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export async function runSimulation(options: RunOptions): Promise<RunResult> {
-    const { seed, ticks, citizens: specs, laws = defaultLaws, start, turnDeadlineMs = DEFAULT_TURN_DEADLINE_MS, signal } = options;
+    const { seed, ticks, citizens: specs, laws = defaultLaws, start, turnDeadlineMs = DEFAULT_TURN_DEADLINE_MS, signal,
+        ticksAfterCollapse = DEFAULT_TICKS_AFTER_COLLAPSE } = options;
 
     // Citizen crashes, as Ledger events waiting to be recorded with the next batch.
     const crashEvents: LedgerEvent[] = [];
@@ -94,8 +102,11 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
 
     let ticksRun = 0;
     let collapsed = false;
+    let collapsedAt: Tick | null = null;
+    let lastTick: Tick = -1;
+    const pastCollapse = () => collapsedAt !== null && lastTick - collapsedAt >= ticksAfterCollapse;
     try {
-        while (ticksRun < ticks && citizens.size > 0 && !signal?.aborted) {
+        while (ticksRun < ticks && citizens.size > 0 && !signal?.aborted && !pastCollapse()) {
             const observations = await world.call({ type: "observe" });
             const expected = [...observations.keys()]; // sorted by id (observe sorts)
             if (expected.length === 0) break; // everyone is dead
@@ -134,6 +145,8 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
                 citizens.delete(id);
             }
             collapsed = report.collapsed;
+            if (collapsed && collapsedAt === null) collapsedAt = report.tick;
+            lastTick = report.tick;
             ticksRun++;
             failIfCrashed();
             options.onTick?.(report);
@@ -141,7 +154,10 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
         record(ledger, takeCrashEvents()); // crashes after the last resolved tick
         const events = await readAll(ledger);
         failIfCrashed();
-        return { events, ticksRun, survivors: [...citizens.keys()].sort(), collapsed, aborted: signal?.aborted ?? false };
+        const aborted = signal?.aborted ?? false;
+        const endedBy: RunResult["endedBy"] =
+            aborted ? "aborted" : citizens.size === 0 ? "extinction" : pastCollapse() ? "collapse" : "ticks";
+        return { events, ticksRun, survivors: [...citizens.keys()].sort(), collapsed, aborted, collapsedAt, endedBy };
     } finally {
         // Abort first, so in-flight policy calls stop, then stop the actors.
         for (const { lifetime } of citizens.values()) lifetime.abort(new Error("the run ended"));

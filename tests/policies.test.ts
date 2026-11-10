@@ -1,5 +1,5 @@
 import { it, expect, describe } from "vitest";
-import { fairShareAmount, fairSharePolicy } from "../src/agents/policies/fairShare";
+import { fairShareAmount, fairSharePolicy, makeStewardPolicy, subsistenceAmount, TROUBLE_AT } from "../src/agents/policies/fairShare";
 import { makeRandomPolicy } from "../src/agents/policies/random";
 import { greedyPolicy, makeGreedyPolicy } from "../src/agents/policies/greedy";
 import { rng } from "../src/rng";
@@ -18,9 +18,9 @@ const laws: Laws = Object.freeze({
     starvationTicks: 3,
 });
 
-const obs = (estimatedP: number, citizenCount: number): Observation => ({
+const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observation => ({
     tick: 0,
-    self: { id: "me", age: 1, balance: 1000, hungerTicks: 0 },
+    self: { id: "me", age: 1, balance, hungerTicks: 0 },
     citizenCount,
     estimatedP,
     laws,
@@ -46,7 +46,7 @@ describe("fairShare", () => {
     });
 
     it('asks for a whole number of credits', () => {
-        for (const P of [12_345, 50_000, 77_777]) {
+        for (const P of [45_678, 50_000, 77_777]) {
             expect(Number.isInteger(harvestOf(fairSharePolicy(obs(P, 7), [])))).toBe(true);
         }
     });
@@ -62,7 +62,37 @@ describe("fairShare", () => {
         expect(harvestOf(fairSharePolicy(obs(laws.K * 1.1, 5), []))).toBeGreaterThanOrEqual(0);
     });
 
-    it.todo('near or below the collapse threshold (collapseAt · K) it harvests ... (your decision)');
+    describe("when the pool is in trouble (estimate below TROUBLE_AT · K)", () => {
+        const low = TROUBLE_AT * laws.K - 1;
+
+        it('takes its fair share right at the edge of trouble', () => {
+            expect(harvestOf(fairSharePolicy(obs(TROUBLE_AT * laws.K, 5), []))).toBe(fairShareAmount(obs(TROUBLE_AT * laws.K, 5)));
+        });
+
+        it('lives on savings: harvests nothing while it has more than one upkeep in the bank', () => {
+            expect(fairSharePolicy(obs(low, 5, laws.upkeep + 1), [])).toEqual([]);
+            expect(fairSharePolicy(obs(laws.collapseAt * laws.K / 2, 5, 5000), [])).toEqual([]); // even when collapsed
+        });
+
+        it('out of savings, harvests only the minimum for living: upkeep plus the harvest fee', () => {
+            for (const balance of [0, laws.upkeep]) {
+                expect(harvestOf(fairSharePolicy(obs(low, 5, balance), []))).toBe(laws.upkeep + laws.prices.harvest);
+            }
+        });
+
+        it('the minimum for living leaves it exactly even: net income pays the upkeep', () => {
+            const state = createWorld(1, ["me"], laws, { P: 20_000, balance: 0 });
+            const amount = subsistenceAmount(obs(20_000, 1, 0));
+            const { state: next, report } = resolve(state, new Map([["me", [{ type: "harvest", amount }]]]), laws);
+            expect(report.dead.size).toBe(0);
+            expect(next.agents.get("me")).toMatchObject({ balance: 0, hungerTicks: 0 });
+        });
+
+        it('the trouble threshold can be set', () => {
+            expect(makeStewardPolicy(0.6)(obs(0.55 * laws.K, 5), [])).toEqual([]);
+            expect(harvestOf(makeStewardPolicy(0.5)(obs(0.55 * laws.K, 5), []))).toBe(fairShareAmount(obs(0.55 * laws.K, 5)));
+        });
+    });
 
     it('5 × fairShare keep the pool alive for 250 ticks, and nobody starves', () => {
         const ids = ["a", "b", "c", "d", "e"];

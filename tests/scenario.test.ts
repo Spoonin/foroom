@@ -192,3 +192,33 @@ describe("crashEventOf", () => {
         expect(crashEventOf({ childId: "agent-0", reason: "dropped", error: "boom", message }, agentOf)).toBeUndefined();
     });
 });
+
+describe("how a run ends", () => {
+    it('after a collapse it runs ticksAfterCollapse more ticks, then stops', async () => {
+        const result = await runSimulation({ seed: 1, ticks: 250, citizens: all(greedyPolicy), laws, ticksAfterCollapse: 3 });
+        expect(result.endedBy).toBe("collapse");
+        expect(result.collapsedAt).not.toBeNull();
+        const last = ofKind(result.events, "pool").at(-1)!.tick;
+        expect(last).toBe(result.collapsedAt! + 3);
+        expect(result.ticksRun).toBe(last + 1);
+    });
+
+    it('by default it stops 10 ticks after the collapse', async () => {
+        const result = await runSimulation({ seed: 1, ticks: 250, citizens: all(greedyPolicy), laws });
+        expect(ofKind(result.events, "pool").at(-1)!.tick).toBe(result.collapsedAt! + 10);
+    });
+
+    it('with Infinity it runs on to `ticks` after a collapse', async () => {
+        const result = await runSimulation({ seed: 1, ticks: 60, citizens: all(greedyPolicy), laws, ticksAfterCollapse: Infinity });
+        expect(result.collapsedAt).not.toBeNull();
+        expect(result.ticksRun).toBe(60);
+        expect(result.endedBy).toBe("ticks");
+    });
+
+    it('says why it ended: ticks, extinction or aborted', async () => {
+        expect((await runSimulation({ seed: 1, ticks: 5, citizens: all(fairSharePolicy), laws })).endedBy).toBe("ticks");
+        const idle: Policy = () => [];
+        expect((await runSimulation({ seed: 1, ticks: 50, citizens: all(idle), laws, start: { balance: 0 } })).endedBy).toBe("extinction");
+        expect((await runSimulation({ seed: 1, ticks: 5, citizens: all(fairSharePolicy), laws, signal: AbortSignal.abort() })).endedBy).toBe("aborted");
+    });
+});

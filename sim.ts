@@ -75,8 +75,9 @@ try {
     const file = `runs/${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     await writeFile(file, toCsv(tickRows(result.events, citizens.length)));
 
-    console.log(`\n${result.ticksRun} ticks${result.aborted ? " (stopped early)" : ""}, ${result.survivors.length}/${citizens.length} alive, ` +
-        `${result.collapsed ? "pool collapsed" : "pool alive"}. Wrote ${file}`);
+    const why = { ticks: "", collapse: ` (stopped ${result.ticksRun - 1 - result.collapsedAt!} ticks after the collapse)`, extinction: " (everyone died)", aborted: " (stopped early)" }[result.endedBy];
+    console.log(`\n${result.ticksRun} ticks${why}, ${result.survivors.length}/${citizens.length} alive, ` +
+        `${result.collapsed ? `pool collapsed on tick ${result.collapsedAt}` : "pool alive"}. Wrote ${file}`);
 } catch (error) {
     console.error("Simulation failed:", error);
     process.exitCode = 1;
