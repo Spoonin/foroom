@@ -186,13 +186,12 @@ export function upkeepCharge(balance: number, upkeep: number): number {
     return Math.min(upkeep, Math.max(0, balance));
 }
 
-// Hunger counter, per PLAN.md:
-// - any income this tick (net harvest or gifts received) resets it;
-// - no income and a balance of 0 after upkeep (the agent is starving) increments it;
-// - no income but savings left: not starving, counter at 0.
-export function nextHunger(hungerTicks: number, income: number, balanceAfterUpkeep: number): number {
-    if (income > 0) return 0;
-    return balanceAfterUpkeep <= 0 ? hungerTicks + 1 : 0;
+// Hunger counter, per PLAN.md: a tick is hungry when upkeep was not paid in full, whatever the
+// money came from (savings, harvest or gifts). Paying it in full resets the counter.
+// Not "any income resets it": then 1 credit a tick (a gift, or a harvest of fee + 1) kept an agent
+// alive forever with 99% of its upkeep unpaid, and keeping clients alive was almost free.
+export function nextHunger(hungerTicks: number, paidUpkeep: number, upkeep: number): number {
+    return paidUpkeep < upkeep ? hungerTicks + 1 : 0;
 }
 
 export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldAction[]>, laws: Laws): {state: WorldState, report: Report} {
@@ -223,7 +222,7 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         upkeepCharges.set(id, paidUpkeep);
         const balance = Math.max(0, beforeUpkeep - paidUpkeep);
 
-        const hungerTicks = nextHunger(agent.hungerTicks, income, balance);
+        const hungerTicks = nextHunger(agent.hungerTicks, paidUpkeep, laws.upkeep);
         const age = agent.age + 1;
         const lifespan = worldState.lifespans.get(id);
         if (lifespan === undefined) {

@@ -69,13 +69,13 @@ describe("fairShare", () => {
             expect(harvestOf(fairSharePolicy(obs(TROUBLE_AT * laws.K, 5), []))).toBe(fairShareAmount(obs(TROUBLE_AT * laws.K, 5)));
         });
 
-        it('lives on savings: harvests nothing while it has more than one upkeep in the bank', () => {
-            expect(fairSharePolicy(obs(low, 5, laws.upkeep + 1), [])).toEqual([]);
+        it('lives on savings: harvests nothing while its balance covers a full upkeep', () => {
+            expect(fairSharePolicy(obs(low, 5, laws.upkeep), [])).toEqual([]);
             expect(fairSharePolicy(obs(laws.collapseAt * laws.K / 2, 5, 5000), [])).toEqual([]); // even when collapsed
         });
 
         it('out of savings, harvests only the minimum for living: upkeep plus the harvest fee', () => {
-            for (const balance of [0, laws.upkeep]) {
+            for (const balance of [0, laws.upkeep - 1]) {
                 expect(harvestOf(fairSharePolicy(obs(low, 5, balance), []))).toBe(laws.upkeep + laws.prices.harvest);
             }
         });

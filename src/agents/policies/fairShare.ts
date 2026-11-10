@@ -35,10 +35,9 @@ export function makeStewardPolicy(troubleAt: number = TROUBLE_AT): Policy {
         if (estimatedP >= troubleAt * laws.K) {
             return [{ type: "harvest", amount: fairShareAmount(observation) }];
         }
-        // In trouble. Savings first: with more than one upkeep in the bank, the agent pays upkeep
-        // from it and leaves the pool alone. (At exactly one upkeep it would end the tick at 0
-        // with no income, which counts as a hungry tick.)
-        if (self.balance > laws.upkeep) return [];
+        // In trouble. Savings first: while the balance covers a full upkeep, the agent pays it
+        // from savings and leaves the pool alone (a tick is hungry only when upkeep goes unpaid).
+        if (self.balance >= laws.upkeep) return [];
         return [{ type: "harvest", amount: subsistenceAmount(observation) }];
     };
 }

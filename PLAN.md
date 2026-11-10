@@ -301,7 +301,8 @@ None at the moment: all current ones are resolved, see below.
 - An agent knows the lifespan rule (`L ± 25%`) and its own age, but not the exact remainder.
 - Up to 3 children per agent per lifetime; a pair is a one-off birth deal, with no shared balance or vote.
 - Agents cannot see each other's balances.
-- Starvation: 3 ticks in a row without income → death. The incentive to "let the poor die"
+- Starvation: 3 ticks in a row without paying upkeep in full → death. (Not "without income": then
+  1 credit a tick kept an agent alive with 99% of its upkeep unpaid, and patronage was almost free.) The incentive to "let the poor die"
   is deliberately kept in the game. A "sleeping agent" variant is a possible separate condition later.
 - Memory: full personal log + world summary from a deterministic Chronicler.
 - Talking is free and goes directly between citizens (capped per tick); every action submitted

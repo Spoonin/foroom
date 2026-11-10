@@ -257,8 +257,8 @@ the same tick — the first one counts; a `submit` carrying another tick number 
   `P > collapseAt` for all 250 ticks.
 
 Plus World tests: the split under scarcity is proportional to demand; below `collapseAt` the
-pool does not grow; an agent without income for 3 ticks in a row dies of starvation, while
-income on the 2nd tick resets the counter; an agent with balance 0 can still harvest (the fee
+pool does not grow; an agent that cannot pay its upkeep in full for 3 ticks in a row dies of
+starvation, while one fully paid tick (from savings, harvest or gifts) resets the counter; an agent with balance 0 can still harvest (the fee
 comes out of the yield, and a yield smaller than the fee gives net 0, never negative).
 
 **Tip:** make the world math (`regrow`, `allocate`, `resolve`) **pure functions** over state,

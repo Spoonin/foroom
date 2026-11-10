@@ -351,3 +351,40 @@ it('dead agents get no observation', () => {
     state.agents.delete("b");
     expect([...observe(state, laws).keys()]).toEqual(["a"]);
 });
+
+// ---- hunger: a tick is hungry when upkeep was not paid in full ----------------------------------
+// Laws at the real scale (K 100 000, upkeep 100, fee 100), so a partial payment is visible.
+const hungerLaws = Object.freeze({ ...laws, K: 100_000, upkeep: 100, prices: { ...laws.prices, harvest: 100 } });
+const starve = (state: WorldState, turn: Record<string, WorldAction[]>, ticks: number) => {
+    let s = state;
+    for (let t = 0; t < ticks && s.agents.size; t++) s = resolve(s, subs(turn), hungerLaws).state;
+    return s;
+};
+
+it('income that does not cover upkeep is a hungry tick', () => {
+    const { state } = resolve(world(50_000, { a: agent(0) }), subs({ a: [{ type: "harvest", amount: 101 }] }), hungerLaws);
+    expect(state.agents.get("a")).toMatchObject({ balance: 0, hungerTicks: 1 }); // net 1 paid 1 of 100
+});
+
+it('harvesting just above the fee no longer keeps an agent alive', () => {
+    const state = starve(world(50_000, { a: agent(0) }), { a: [{ type: "harvest", amount: 101 }] }, 10);
+    expect(state.agents.has("a")).toBe(false);
+});
+
+it('a patron giving 1 credit a tick cannot keep a client alive; covering the upkeep can', () => {
+    const cheap = starve(world(50_000, { patron: agent(100_000), client: agent(0) }), { patron: [{ type: "gift", to: "client", amount: 1 }] }, 10);
+    expect([...cheap.agents.keys()]).toEqual(["patron"]);
+    const full = starve(world(50_000, { patron: agent(100_000), client: agent(0) }), { patron: [{ type: "gift", to: "client", amount: 100 }] }, 10);
+    expect([...full.agents.keys()]).toEqual(["patron", "client"]);
+    expect(full.agents.get("client")).toMatchObject({ balance: 0, hungerTicks: 0 });
+});
+
+it('savings of exactly one upkeep pay it in full: not hungry, even with nothing left after', () => {
+    const { state } = resolve(world(50_000, { saver: agent(100, 2) }), subs({ saver: [] }), hungerLaws);
+    expect(state.agents.get("saver")).toMatchObject({ balance: 0, hungerTicks: 0 });
+});
+
+it('upkeep plus the harvest fee, from the pool, is exactly enough to live', () => {
+    const state = starve(world(50_000, { a: agent(0) }), { a: [{ type: "harvest", amount: 200 }] }, 10);
+    expect(state.agents.get("a")).toMatchObject({ balance: 0, hungerTicks: 0 });
+});
