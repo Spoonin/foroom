@@ -13,6 +13,7 @@ const obs = (tick: Tick): Observation => ({
     tick,
     self: { id: "a", age: tick, balance: 1000, hungerTicks: 0 },
     citizenCount: 5,
+    residents: ["a", "b", "c", "d", "e"],
     estimatedP: 50_000,
     laws,
 });

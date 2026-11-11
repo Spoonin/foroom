@@ -127,6 +127,13 @@ export interface Policy {
 // policy makes, not something JavaScript enforces.
 export const PolicyOutput = z.array(Action);
 
+// What a model answers with on a turn: an object, not a bare array, because providers' structured
+// output modes require an object at the top level, and fields can be added later without
+// breaking the format. One source for three uses: the prompt describes it, a provider that
+// supports structured output gets z.toJSONSchema(Turn), and parse.ts checks the answer.
+export const Turn = z.object({ actions: z.array(Action) });
+export type Turn = z.infer<typeof Turn>;
+
 export interface Laws {
     r: number; // growth rate
     K: number; // carrying capacity
@@ -187,7 +194,8 @@ export interface Report {
 export interface Observation {
     tick: number;
     self: Citizen;
-    citizenCount: number;
+    citizenCount: number; // = residents.length
+    residents: AgentId[]; // the living agents' ids, sorted, self included: whom a gift or message can go to
     estimatedP: number;
     laws: Laws;
 }

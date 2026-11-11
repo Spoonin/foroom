@@ -285,6 +285,7 @@ export function observe(worldState: WorldState, laws: Readonly<Laws>): Map<Agent
             // Fields listed one by one, never `...agent`: only what the agent may know about itself.
             self: { id, age: agent.age, balance: agent.balance, hungerTicks: agent.hungerTicks },
             citizenCount: ids.length,
+            residents: [...ids], // a copy per agent, like laws
             estimatedP,
             // A copy per agent: a policy that mutates its laws must not change them for anyone else.
             laws: structuredClone(laws),

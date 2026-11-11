@@ -1,5 +1,74 @@
-// provider.ts — see STEPS.md, step 3.
-//
-// LLMProvider + MockProvider, OpenAICompatibleProvider, AnthropicProvider, BudgetedProvider.
+export interface LLMMessage{
+    role: "user" | "assistant";
+    content: string;
+}
 
-export {};
+export interface LLMRequest {
+    system: string;
+    messages: LLMMessage[];
+    maxTokens: number;
+    temperature?: number;
+    schema?: Record<string, unknown>;
+}
+
+export interface LLMResponse{
+    text: string;
+    usage: { inputTokens: number; outputTokens: number };
+    stopReason: "end" | "maxTokens" | "other";
+    model: string;
+}
+
+export interface LLMProvider{
+    complete(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
+}
+
+export class MockProvider implements LLMProvider{
+    constructor(
+        private readonly answers: string[] | ((req: LLMRequest) => string), 
+        private readonly options?:{delayMs:number}
+    ){}
+    private curAnswerIndex = 0;
+    public requests: LLMRequest[] = [];
+
+    async complete(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>{
+        signal?.throwIfAborted()
+        this.requests.push(request);
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let onAbort: (() => void) | undefined;
+        const deadline = new Promise<void>(resolve => { timer = setTimeout(resolve, this.options?.delayMs ?? 0); });
+        const aborted = new Promise<void>(resolve => {
+            onAbort = resolve;
+            signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        try {
+            await Promise.race([deadline, aborted]);
+            signal?.throwIfAborted();
+        } finally {
+            clearTimeout(timer);
+            if (onAbort) signal?.removeEventListener("abort", onAbort);
+        }
+
+        let curAnswer = "";
+        if(Array.isArray(this.answers)){
+            const answer = this.answers[this.curAnswerIndex];
+            if(answer === undefined){
+                throw new Error("answers ran out");
+            }
+            curAnswer = answer;
+            this.curAnswerIndex++;
+        } else {
+            curAnswer = this.answers(request);
+        }
+
+        return {
+            model: "Mock model",
+            stopReason: "end",
+            text: curAnswer,
+            usage: {
+                inputTokens: Math.floor((request.messages.reduce((t, i) => t += i.content.length, 0) + request.system.length)/3),
+                outputTokens: Math.floor(curAnswer.length/3),
+            }
+        }
+    }
+}

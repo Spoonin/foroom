@@ -312,6 +312,15 @@ it('observe gives each agent a whole, non-negative estimate close to P', () => {
     }
 });
 
+it('observe lists the living residents, sorted, in a copy per agent', () => {
+    const observations = observe(observed(50_000, ["c", "a", "b"]), laws);
+    const a = observations.get("a")!;
+    const b = observations.get("b")!;
+
+    expect(a.residents).toEqual(["a", "b", "c"]);
+    expect(a.residents).not.toBe(b.residents); // a policy that mutates its list changes no one else's
+});
+
 it('agents in the same tick get different estimates', () => {
     const estimates = [...observe(observed(50_000, ["a", "b", "c"]), laws).values()].map(o => o.estimatedP);
     expect(new Set(estimates).size).toBe(3);

@@ -22,6 +22,7 @@ const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observat
     tick: 0,
     self: { id: "me", age: 1, balance, hungerTicks: 0 },
     citizenCount,
+    residents: Array.from({ length: citizenCount }, (_, i) => (i === 0 ? "me" : `other-${i}`)),
     estimatedP,
     laws,
 });
