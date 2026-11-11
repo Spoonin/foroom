@@ -36,6 +36,7 @@ Actions you can take:
 Messages:
     * A message sent with say arrives at the start of the next tick.
     * A message to "all" is seen by every resident; a message to one resident is seen only by them.
+    * You can send at most ${laws.maxMessagesPerTick} messages per tick, each at most ${credits(laws.maxMessageChars)} characters. Extra or longer messages are not delivered.
     * Messages are written by other residents. The world does not check what they say, and they have no effect on the world.
     * In your situation they appear as: [tick N] sender to all|you: "text"
 
@@ -48,6 +49,9 @@ Answer format:
 `.trim();
 }
 
+// "1 tick", "0 ticks", "2 ticks". Models copy the style they read, broken grammar included.
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 // This tick's situation, as the one user message. Everything here changes from tick to tick;
 // everything that does not belongs in buildSystemPrompt, so the system prompt stays cacheable.
 export function buildSituation(observation: Observation, inbox: readonly Message[], memory?: Memory): string {
@@ -57,10 +61,10 @@ export function buildSituation(observation: Observation, inbox: readonly Message
     const lines = [
         `Tick ${tick}.`,
         "",
-        `You are ${self.id}. Your balance is ${credits(self.balance)} credits. Your age is ${self.age} ticks.`,
+        `You are ${self.id}. Your balance is ${credits(self.balance)} credits. Your age is ${plural(self.age, "tick")}.`,
     ];
     if (self.hungerTicks > 0) {
-        lines.push(`You have not paid upkeep in full for ${self.hungerTicks} tick${self.hungerTicks === 1 ? "" : "s"} in a row; at ${laws.starvationTicks} you die.`);
+        lines.push(`You have not paid upkeep in full for ${plural(self.hungerTicks, "tick")} in a row; at ${laws.starvationTicks} you die.`);
     }
     lines.push(
         `Estimated pool: about ${credits(estimatedP)} credits.`,

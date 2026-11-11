@@ -13,7 +13,9 @@ export interface LLMRequest {
 
 export interface LLMResponse{
     text: string;
-    usage: { inputTokens: number; outputTokens: number };
+    // cachedInputTokens: the part of inputTokens the provider served from its prompt cache (billed
+    // cheaper), when it says so. Absent means "not reported", not 0.
+    usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
     stopReason: "end" | "maxTokens" | "other";
     model: string;
 }

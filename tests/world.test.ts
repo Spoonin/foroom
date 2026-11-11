@@ -94,7 +94,9 @@ const laws = Object.freeze({
         pair: 5,
         spawn: 20
     },
-    starvationTicks: 3
+    starvationTicks: 3,
+    maxMessagesPerTick: 3,
+    maxMessageChars: 300,
 });
 
 it('resolves world state correctly with valid actions', () => {

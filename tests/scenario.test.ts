@@ -9,12 +9,14 @@ import { fairSharePolicy } from "../src/agents/policies/fairShare";
 import { greedyPolicy } from "../src/agents/policies/greedy";
 import { makeRandomPolicy } from "../src/agents/policies/random";
 import { deriveSeed, rng } from "../src/rng";
-import type { Laws, Outcome, Policy } from "../src/contracts";
+import type { Action, Laws, Outcome, Policy } from "../src/contracts";
 
 const laws: Laws = Object.freeze({
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
     prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
     starvationTicks: 3,
+    maxMessagesPerTick: 3,
+    maxMessageChars: 300,
 });
 
 const ids = ["a", "b", "c", "d", "e"];
@@ -254,3 +256,64 @@ describe("outcomes reach the agents", () => {
         expect(lastSeen?.harvest).toEqual({ asked: 500, got: 500, net: 400 });
     });
 });
+
+describe("talk", () => {
+    // "a" talks on tick 0 only; everyone records what it hears on each tick.
+    function talkers(say: Action[]) {
+        const heard: { tick: number; agent: string; texts: string[] }[] = [];
+        const policy: Policy = (observation, inbox) => {
+            heard.push({ tick: observation.tick, agent: observation.self.id, texts: inbox.map(m => `${m.from}: ${m.text}`) });
+            return observation.self.id === "a" && observation.tick === 0 ? say : [];
+        };
+        return { heard, policy };
+    }
+    const heardBy = (heard: { tick: number; agent: string; texts: string[] }[], agent: string) =>
+        heard.filter(h => h.agent === agent).map(h => h.texts);
+
+    it('a message said on tick t is in the inbox on tick t + 1, not on t, and not again on t + 2', async () => {
+        const { heard, policy } = talkers([{ type: "say", to: "b", text: "share?" }]);
+        await runSimulation({ seed: 1, ticks: 3, laws, citizens: all(policy) });
+
+        expect(heardBy(heard, "b")).toEqual([[], ["a: share?"], []]);
+        expect(heardBy(heard, "c")).toEqual([[], [], []]); // private
+    });
+
+    it('a message to "all" reaches everyone else, and talk costs nothing', async () => {
+        const { heard, policy } = talkers([{ type: "say", to: "all", text: "hello" }]);
+        const { events } = await runSimulation({ seed: 1, ticks: 2, laws, citizens: all(policy) });
+
+        for (const id of ["b", "c", "d", "e"]) expect(heardBy(heard, id)[1]).toEqual(["a: hello"]);
+        expect(heardBy(heard, "a")[1]).toEqual([]);
+        expect(ofKind(events, "charge").filter(e => e.agent === "a")).toEqual([]);
+        expect(ofKind(events, "message")).toEqual([{ tick: 0, kind: "message", agent: "a", to: "all", text: "hello" }]);
+    });
+
+    it('messages over the cap are dropped and logged', async () => {
+        const says: Action[] = ["1", "2", "3", "4"].map(text => ({ type: "say", to: "b", text }));
+        const { heard, policy } = talkers(says);
+        const { events } = await runSimulation({ seed: 1, ticks: 2, laws, citizens: all(policy) });
+
+        expect(heardBy(heard, "b")[1]).toEqual(["a: 1", "a: 2", "a: 3"]);
+        expect(ofKind(events, "messageDropped")).toEqual([
+            { tick: 0, kind: "messageDropped", agent: "a", to: "b", reason: "over the per-tick cap" },
+        ]);
+    });
+
+    it('a turn that misses the deadline loses its messages with its actions', async () => {
+        const heard: string[][] = [];
+        const policy: Policy = async (observation, inbox) => {
+            if (observation.self.id === "b") heard.push(inbox.map(m => m.text));
+            if (observation.self.id === "a" && observation.tick === 0) {
+                await sleep(60); // past the 20 ms deadline
+                return [{ type: "say", to: "b", text: "too late" }];
+            }
+            return [];
+        };
+        const { events } = await runSimulation({ seed: 1, ticks: 3, laws, turnDeadlineMs: 20, citizens: all(policy) });
+
+        expect(heard.flat()).not.toContain("too late");
+        expect(ofKind(events, "message")).toEqual([]);
+        expect(ofKind(events, "timeout").map(e => [e.tick, e.agent])).toEqual([[0, "a"]]);
+    });
+});
+

@@ -26,4 +26,7 @@ export const laws = readonly<Laws>({
         spawn: 2000,
     }),
     starvationTicks: 3, // number of ticks an agent can survive without food before dying
+    // Free talk is bounded by volume, not credits: equal volume means equal voice (PLAN.md).
+    maxMessagesPerTick: 3,
+    maxMessageChars: 300,
 });

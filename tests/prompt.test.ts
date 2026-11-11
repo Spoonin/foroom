@@ -58,6 +58,9 @@ describe("buildSystemPrompt", () => {
         expect(system).toContain("falls below 400,000 credits");
         expect(system).toContain("A fee of 1,500 credits");
         expect(system).toContain("amount + 30 credits");
+
+        const talk = buildSystemPrompt(lawsWith({ maxMessagesPerTick: 2, maxMessageChars: 1_200 }));
+        expect(talk).toContain("at most 2 messages per tick, each at most 1,200 characters");
     });
 
     it("renders percentages without floating-point noise", () => {
@@ -96,6 +99,7 @@ describe("buildSituation", () => {
         expect(text).toContain("You are agent-02.");
         expect(text).toContain("balance is 740 credits");
         expect(text).toContain("age is 5 ticks");
+        expect(buildSituation(obs({}, { age: 1 }), [])).toContain("age is 1 tick.");
         expect(text).toContain("about 41,234 credits");
     });
 

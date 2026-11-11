@@ -15,12 +15,13 @@
 //     is aborted so an in-flight policy call (a model request) stops too.
 
 import { Supervisor, type Crash, type DeadLetter } from "@cue/core";
-import type { AgentId, Laws, Policy, Report, Tick, WorldAction } from "../contracts";
+import type { AgentId, Laws, Policy, Report, Say, Tick, WorldAction } from "../contracts";
 import { laws as defaultLaws } from "../config";
 import { spawnCitizen, type CitizenMsg, type CitizenRef } from "../agents/citizen";
 import { createWorld, spawnWorld } from "./world";
 import { eventsFromReport, readAll, record, spawnLedger, type LedgerEvent } from "./ledger";
 import { spawnTurnCollector } from "./turnCollector";
+import { routeMessages } from "./talk";
 
 export interface CitizenSpec {
     id: AgentId;
@@ -125,10 +126,12 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
 
             // Every living agent gets a turn: a missing submit is an empty one.
             const submissions = new Map<AgentId, WorldAction[]>();
+            const said = new Map<AgentId, Say[]>();
             const runnerEvents: LedgerEvent[] = [];
             for (const id of expected) {
                 const submit = submitted.get(id);
                 submissions.set(id, submit?.actions ?? []);
+                if (submit?.messages) said.set(id, submit.messages);
                 if (!submit) runnerEvents.push({ tick, kind: "timeout", agent: id });
                 else if (submit.error !== undefined) runnerEvents.push({ tick, kind: "policyFailed", agent: id, reason: submit.error });
             }
@@ -144,8 +147,14 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
                 }
                 citizens.delete(id);
             }
-            // Before the next tick starts: each survivor's mailbox then holds its outcome ahead of
-            // the next `tick`, so the next policy call always sees what happened this tick.
+            // Before the next tick starts: each survivor's mailbox then holds its messages and its
+            // outcome ahead of the next `tick`, so the next policy call always sees what was said to
+            // it and what happened this tick. Only the living receive.
+            const { inboxes, events: talkEvents } = routeMessages(tick, said, [...citizens.keys()], laws);
+            record(ledger, talkEvents);
+            for (const [id, messages] of inboxes) {
+                citizens.get(id)?.ref.cast({ type: "hear", messages });
+            }
             for (const [id, outcome] of report.outcomes) {
                 citizens.get(id)?.ref.cast({ type: "outcome", outcome });
             }
@@ -181,6 +190,7 @@ export function crashEventOf(letter: DeadLetter, agentOf: (actorId: string) => A
     const message = letter.message as CitizenMsg;
     const tick = message.type === "tick" ? message.observation.tick
         : message.type === "outcome" ? message.outcome.tick
+        : message.type === "hear" ? (message.messages[0]?.tick ?? -1)
         : message.tick;
     return { tick, kind: "crash", agent, reason: `${message.type} handler: ${reasonOf(letter.error)}` };
 }

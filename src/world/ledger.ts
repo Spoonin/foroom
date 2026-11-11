@@ -9,6 +9,7 @@
 
 import type { AgentRef, Supervisor } from "@cue/core";
 import type { AgentId, DeathReason, InvalidReason, Report, Tick, WorldAction } from "../contracts";
+import type { DropReason } from "./talk";
 
 export type LedgerEvent =
     // The exact pool after the tick, and whether it has collapsed.
@@ -27,8 +28,13 @@ export type LedgerEvent =
     | { tick: Tick; kind: "policyFailed"; agent: AgentId; reason: string }
     // Written by Runner: one of the Citizen's own handlers threw (a bug in our code, not the agent's).
     // The Citizen keeps running; the tick usually also shows a timeout, and this says why.
-    | { tick: Tick; kind: "crash"; agent: AgentId; reason: string };
-// Later steps add kinds here: "message" (step 4), "values" (step 3), "birth" (step 6), ...
+    | { tick: Tick; kind: "crash"; agent: AgentId; reason: string }
+    // Written by Runner (see talk.ts): a message said on `tick`, delivered before tick + 1. One event
+    // per message, not per recipient: `to: "all"` reached every living resident but the sender.
+    | { tick: Tick; kind: "message"; agent: AgentId; to: AgentId | "all"; text: string }
+    // Written by Runner: a message that was not delivered, and why.
+    | { tick: Tick; kind: "messageDropped"; agent: AgentId; to: AgentId | "all"; reason: DropReason };
+// Later steps add kinds here: "values" (step 3), "birth" (step 6), ...
 
 export type LedgerKind = LedgerEvent["kind"];
 

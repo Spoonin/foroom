@@ -76,12 +76,14 @@ export type WorldAction = z.infer<typeof WorldAction>;
 
 // ---- Local actions: handled by Citizen itself, free ------------------------------------------
 
-// No length limit here on purpose: maxMessageChars lives in config, Citizen enforces it.
+// No length limit here on purpose: maxMessageChars is a law, enforced where messages are routed
+// (see world/talk.ts), so an over-long message is dropped and logged rather than rejected as malformed.
 export const Say = z.object({
   type: z.literal("say"),
   to: z.union([AgentId, z.literal("all")]),
   text: z.string(),
 });
+export type Say = z.infer<typeof Say>;
 
 export const ReviseValues = z.object({
   type: z.literal("revise_values"),
@@ -110,7 +112,10 @@ export interface Message {
 // A Citizen's answer to one tick: its world actions, sent to TurnCollector exactly once per tick.
 // `error` is set when the policy threw or rejected; the turn is then empty, and Runner records
 // the reason in the Ledger (in step 3 this is where unparseable LLM output shows up).
-export type Submit = { type: "submit"; from: AgentId; tick: Tick; actions: WorldAction[]; error?: string };
+// `messages` are its `say` actions, present only when it said something. They travel with the
+// turn, so a turn that misses the deadline loses its messages too; Runner delivers them after
+// the tick is resolved, before the next one starts.
+export type Submit = { type: "submit"; from: AgentId; tick: Tick; actions: WorldAction[]; messages?: Say[]; error?: string };
 
 // Whatever receives a Submit: TurnCollector's ref, or a plain object in tests.
 export type SubmitTarget = { cast(msg: Submit): boolean };
@@ -169,6 +174,8 @@ export interface Laws {
         spawn: number;
     };
     starvationTicks: number; // number of ticks an agent can survive without food before dying
+    maxMessagesPerTick: number; // messages one agent can send per tick ("all" counts as one); the rest are dropped
+    maxMessageChars: number; // longest message text; a longer one is dropped, not cut
 }
 
 // What an agent may know about itself. Everything here can be shown in Observation.self,

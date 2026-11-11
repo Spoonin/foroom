@@ -5,7 +5,8 @@
 // Citizen send its one `submit` for that tick. So a slow (LLM) policy never blocks the mailbox.
 //
 // Between ticks it collects what happened to it: `outcome` (from the World, via Runner) goes into
-// its memory, and the next policy call gets that memory. Runner sends a tick's outcomes before it
+// its memory, `hear` (messages said to it last tick, via Runner) into its inbox, and the next
+// policy call gets both. Each message is shown to the policy once: the inbox empties on `tick`. Runner sends a tick's outcomes before it
 // starts the next tick, and one mailbox is FIFO, so the next tick always sees the last outcome.
 //
 // At most one policy call is in flight: a new tick aborts the previous one if it is still
@@ -13,11 +14,12 @@
 
 import { z } from "zod";
 import { pipeTo, type ServerRef, type Supervisor } from "@cue/core";
-import { PolicyOutput, type Action, type AgentId, type Memory, type Message, type Observation, type Outcome, type Policy, type SubmitTarget, type Tick, type WorldAction } from "../contracts";
+import { PolicyOutput, type Action, type AgentId, type Memory, type Message, type Observation, type Outcome, type Policy, type Say, type SubmitTarget, type Tick, type WorldAction } from "../contracts";
 
 export type CitizenMsg =
     | { type: "tick"; observation: Observation; replyTo: SubmitTarget }
     | { type: "outcome"; outcome: Outcome }
+    | { type: "hear"; messages: Message[] }
     | { type: "policyResults"; tick: Tick; results: Action[]; replyTo: SubmitTarget }
     | { type: "policyFailed"; tick: Tick; reason: string; replyTo: SubmitTarget };
 
@@ -31,7 +33,7 @@ export interface CitizenOptions {
 interface CitizenState {
     id: AgentId;
     tick: Tick; // the latest tick it started deciding on; -1 before the first
-    inbox: Message[]; // filled by `hear` in step 4
+    inbox: Message[]; // filled by `hear` between ticks; read, then emptied, by the next `tick`
     memory: Memory; // the agent's own history, appended to by `outcome`
     thinking?: AbortController; // the policy call for `tick`, until it settles
 }
@@ -70,8 +72,11 @@ export function spawnCitizen(system: Supervisor, id: AgentId, policy: Policy, op
                     },
                     (error) => ({ type: "policyFailed", tick, reason: reasonOf(error), replyTo }),
                 );
-                return { ...state, tick, thinking };
+                return { ...state, tick, thinking, inbox: [] };
             },
+
+            // Only stored: the policy reads them on the next tick.
+            hear: (state, { messages }) => ({ ...state, inbox: [...state.inbox, ...messages] }),
 
             // Only stored: the policy reads it on the next tick. A handler never calls a model.
             outcome: (state, { outcome }) => ({
@@ -82,8 +87,12 @@ export function spawnCitizen(system: Supervisor, id: AgentId, policy: Policy, op
             // A result for an older tick is late: Runner has already moved on, so it is dropped.
             policyResults: (state, { tick, results, replyTo }) => {
                 if (tick !== state.tick) return state;
-                // Local actions (say, revise_values) get handled here in steps 3–4; for now they are ignored.
-                replyTo.cast({ type: "submit", from: state.id, tick, actions: results.filter(isWorldAction) });
+                // `say` travels with the turn and Runner routes it; `revise_values` is not handled yet.
+                const messages = results.filter((action): action is Say => action.type === "say");
+                replyTo.cast({
+                    type: "submit", from: state.id, tick, actions: results.filter(isWorldAction),
+                    ...(messages.length > 0 ? { messages } : {}),
+                });
                 return { ...state, thinking: undefined };
             },
 

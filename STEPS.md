@@ -353,9 +353,15 @@ answers in a row give an empty turn; the graph never makes more model calls than
 ## Step 4. Talk and forum
 
 **Talk (✍️, in `citizen.ts`):** direct messages between citizens, free in credits.
-- A `hear` handler appends to the inbox in Citizen state.
-- One send function: Ledger first, then `cast` to the recipient (or to every peer for `"all"`).
-  Caps from config: `maxMessagesPerTick`, `maxMessageChars`; anything over is dropped and logged.
+- *(Built early, in step 3, routed through Runner instead of Citizen-to-Citizen casts.)*
+  A Citizen puts its `say` actions in its `submit` (`messages`). After `resolve`, Runner calls
+  `routeMessages` (`world/talk.ts`, pure), records `message` / `messageDropped` in the Ledger, and
+  casts `hear` to each living recipient before the next `tick`; the inbox empties on `tick`, so
+  each message is shown once. Why: exact next-tick delivery by causality, a late turn loses its
+  messages with its actions, no Citizen holds another's ref, and a dead recipient is filtered out
+  instead of becoming a dead letter. The dead-letter notes below apply only if talk ever goes direct.
+- Caps are laws: `maxMessagesPerTick` ("all" counts as one), `maxMessageChars`; anything over,
+  to oneself, or to someone not alive is dropped (never cut) and logged.
 - Death and messages, as cue actually behaves (checked in `actor.ts`):
   - a message still in the mailbox when `stop()` is called becomes a dead letter with
     `reason: "retired"` — the recipient died this tick and never read it. Log these through

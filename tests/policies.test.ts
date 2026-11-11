@@ -16,6 +16,8 @@ const laws: Laws = Object.freeze({
     upkeep: 100,
     prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
     starvationTicks: 3,
+    maxMessagesPerTick: 3,
+    maxMessageChars: 300,
 });
 
 const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observation => ({

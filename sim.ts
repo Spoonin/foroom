@@ -5,7 +5,9 @@
 //   pnpm sim --ticks=20 --agents=5 --policy=llm --provider=mock
 //
 // policy: fair | greedy | random | llm | mixed (mixed cycles fair, greedy, random over the agents).
-// provider: the model behind llm agents. Only `mock` for now; real ones come with their adapters.
+//   pnpm sim --ticks=3 --agents=2 --policy=llm --provider=deepseek
+//
+// provider: the model behind llm agents: mock | deepseek. deepseek needs DEEPSEEK_API_KEY in .env.
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -20,6 +22,9 @@ import { makeLLMPolicy, type ResponseLog } from "./src/agents/llm/llmPolicy";
 import { buildSystemPrompt } from "./src/agents/llm/prompt";
 import { laws } from "./src/config";
 import { MockProvider, type Provider, type LLMRequest } from "./src/llm/provider";
+import { OpenAICompatibleProvider } from "./src/llm/openaiCompatible";
+
+process.loadEnvFile();
 
 const { values } = parseArgs({
     options: {
@@ -54,9 +59,29 @@ function mockAnswer(request: LLMRequest): string {
     return "```json\n" + JSON.stringify({ actions: [{ type: "harvest", amount }] }) + "\n```";
 }
 
+// Keys live in .env (git-ignored) and are read here only, never inside an adapter.
+// A missing key stops the run before it starts, not as one 401 per agent on tick 0.
+function requireEnv(name: string): string {
+    try { process.loadEnvFile(); } catch { /* no .env file: fall back to the real environment */ }
+    const value = process.env[name];
+    if (!value) {
+        console.error(`Missing ${name}: add it to .env (see .env.example).`);
+        process.exit(1);
+    }
+    return value;
+}
+
 // One provider for the whole run, shared by every llm agent: one place that sees every request.
 const providers: Record<string, () => Provider> = {
     mock: () => new MockProvider(mockAnswer, { delayMs: 20 }),
+    // Thinking is on by default for deepseek-flash: off here, so maxTokens covers only the answer
+    // and temperature works. Turning it on is an experiment of its own.
+    deepseek: () => new OpenAICompatibleProvider({
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-flash",
+        apiKey: requireEnv("DEEPSEEK_API_KEY"),
+        extraBody: { thinking: { type: "disabled" } },
+    }),
 };
 const makeProvider = providers[values.provider];
 if (!makeProvider) {
@@ -71,7 +96,7 @@ mkdirSync("runs", { recursive: true });
 const transcript = `runs/${stamp}.llm.jsonl`;
 
 // Totals over every answer the model gave (calls that were aborted or failed never answered).
-const llmTotals = { calls: 0, inputTokens: 0, outputTokens: 0, unreadable: 0, rejected: 0 };
+const llmTotals = { calls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, unreadable: 0, rejected: 0 };
 
 // One JSON line per answer, appended as it arrives: a run stopped with Ctrl+C or a crash still
 // leaves everything up to that point. Synchronous on purpose: this runs in a policy's promise
@@ -80,6 +105,7 @@ function recordCall(log: ResponseLog): void {
     const { response } = log;
     llmTotals.calls++;
     llmTotals.inputTokens += response.usage.inputTokens;
+    llmTotals.cachedInputTokens += response.usage.cachedInputTokens ?? 0;
     llmTotals.outputTokens += response.usage.outputTokens;
     if (log.error !== undefined) llmTotals.unreadable++;
     llmTotals.rejected += log.rejected.length;
@@ -144,8 +170,8 @@ try {
     console.log(`\n${result.ticksRun} ticks${why}, ${result.survivors.length}/${citizens.length} alive, ` +
         `${result.collapsed ? `pool collapsed on tick ${result.collapsedAt}` : "pool alive"}. Wrote ${file}`);
     if (usesLLM) {
-        const { calls, inputTokens, outputTokens, unreadable, rejected } = llmTotals;
-        console.log(`LLM: ${calls} answers, ${inputTokens} input + ${outputTokens} output tokens, ` +
+        const { calls, inputTokens, cachedInputTokens, outputTokens, unreadable, rejected } = llmTotals;
+        console.log(`LLM: ${calls} answers, ${inputTokens} input (${cachedInputTokens} cached) + ${outputTokens} output tokens, ` +
             `${unreadable} unreadable, ${rejected} actions rejected. Wrote ${transcript}`);
     }
 } catch (error) {

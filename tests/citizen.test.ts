@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Supervisor } from "@cue/core";
 import { spawnCitizen, type CitizenOptions } from "../src/agents/citizen";
-import type { Action, Laws, Observation, Outcome, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
+import type { Action, Laws, Message, Observation, Outcome, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
 
 const laws: Laws = {
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
     prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
     starvationTicks: 3,
+    maxMessagesPerTick: 3,
+    maxMessageChars: 300,
 };
 
 const obs = (tick: Tick): Observation => ({
@@ -94,7 +96,7 @@ describe("Citizen", () => {
         expect(submit?.actions).toEqual(harvest(7));
     });
 
-    it('submits only world actions: local ones (say, revise_values) stay with the Citizen', async () => {
+    it('submits world actions as actions and says as messages; revise_values stays with the Citizen', async () => {
         const policy = vi.fn<Policy>(() => [
             { type: "say", to: "all", text: "let's share" },
             { type: "harvest", amount: 5 },
@@ -105,6 +107,15 @@ describe("Citizen", () => {
         tick(0);
         const [submit] = await collector.received(1);
         expect(submit?.actions).toEqual(harvest(5));
+        expect(submit?.messages).toEqual([{ type: "say", to: "all", text: "let's share" }]);
+    });
+
+    it('a turn without says has no messages field', async () => {
+        const { collector, tick } = start(vi.fn<Policy>(() => harvest(5)));
+
+        tick(0);
+        const [submit] = await collector.received(1);
+        expect(submit).not.toHaveProperty("messages");
     });
 
     it('a throwing policy gives an empty turn with the reason, and the next tick works again', async () => {
@@ -302,5 +313,35 @@ describe("Citizen memory", () => {
         tick(2);
         await collector.received(2);
         expect(seen).toEqual([1, 1]);
+    });
+});
+
+describe("Citizen inbox", () => {
+    const message = (tick: Tick, text: string): Message => ({ from: "b", to: "a", tick, text });
+
+    it('heard messages wait in the inbox until the next tick, and its policy call gets them', async () => {
+        const policy = vi.fn<Policy>(() => []);
+        const { citizen, collector, tick } = start(policy);
+
+        citizen.cast({ type: "hear", messages: [message(0, "one")] });
+        citizen.cast({ type: "hear", messages: [message(0, "two")] });
+        await flushMicrotasks();
+        expect(policy).not.toHaveBeenCalled(); // hearing runs nothing
+
+        tick(1);
+        await collector.received(1);
+        expect(policy.mock.calls[0]?.[1]).toEqual([message(0, "one"), message(0, "two")]);
+    });
+
+    it('each message is shown once: the inbox empties when a tick starts', async () => {
+        const policy = vi.fn<Policy>(() => []);
+        const { citizen, collector, tick } = start(policy);
+
+        citizen.cast({ type: "hear", messages: [message(0, "once")] });
+        tick(1);
+        await collector.received(1);
+        tick(2);
+        await collector.received(2);
+        expect(policy.mock.calls.map(call => call[1].map(m => m.text))).toEqual([["once"], []]);
     });
 });
