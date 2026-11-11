@@ -18,14 +18,14 @@ export interface LLMResponse{
     model: string;
 }
 
-export interface LLMProvider{
+export interface Provider{
     complete(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
 }
 
 // A canned answer: plain text, or text with how it ended (to test an answer cut off at maxTokens).
 export type MockAnswer = string | { text: string; stopReason: LLMResponse["stopReason"] };
 
-export class MockProvider implements LLMProvider{
+export class MockProvider implements Provider{
     constructor(
         private readonly answers: MockAnswer[] | ((req: LLMRequest) => MockAnswer), 
         private readonly options?:{delayMs:number}

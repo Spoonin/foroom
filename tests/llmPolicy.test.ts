@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { laws } from "../src/config";
 import type { Laws, Memory, Message, Observation } from "../src/contracts";
 import { makeLLMPolicy, type ResponseLog } from "../src/agents/llm/llmPolicy";
-import { buildPrompt } from "../src/agents/llm/prompt";
-import { MockProvider, type LLMProvider } from "../src/llm/provider";
+import { buildPrompt, buildSituation } from "../src/agents/llm/prompt";
+import { MockProvider, type Provider } from "../src/llm/provider";
 import { runSimulation } from "../src/world/runner";
 import { ofKind } from "../src/world/ledger";
 
@@ -19,7 +19,7 @@ const obs = (tick = 5, id = "agent-02"): Observation => ({
 const inbox: Message[] = [{ tick: 4, from: "agent-01", to: "all", text: "hello" }];
 
 // A policy over a mock, with every ResponseLog collected.
-function setup(provider: LLMProvider, maxTokens = 500) {
+function setup(provider: Provider, maxTokens = 500) {
     const logs: ResponseLog[] = [];
     const policy = makeLLMPolicy(provider, { maxTokens, temperature: 0.7, onResponse: log => logs.push(log) });
     return { policy, logs };
@@ -80,6 +80,7 @@ describe("makeLLMPolicy: the answer", () => {
             response: expect.objectContaining({ text, stopReason: "end", model: "Mock model" }),
             rejected: [],
             error: undefined,
+            situation: buildSituation(obs(5, "agent-02"), []),
         }]);
     });
 
@@ -122,7 +123,7 @@ describe("makeLLMPolicy: the answer", () => {
 
     it("lets a provider error through unchanged, and reports nothing", async () => {
         const down = new Error("503 Service Unavailable");
-        const provider: LLMProvider = { complete: () => Promise.reject(down) };
+        const provider: Provider = { complete: () => Promise.reject(down) };
         const { policy, logs } = setup(provider);
 
         await expect(policy(obs(), [])).rejects.toBe(down);

@@ -1,5 +1,5 @@
 import type { AgentId, Policy, Tick } from "../../contracts";
-import type { LLMProvider, LLMResponse } from "../../llm/provider";
+import type { Provider, LLMResponse } from "../../llm/provider";
 import { parseActions, type Rejection } from "./parse";
 import { buildPrompt } from "./prompt";
 
@@ -9,8 +9,9 @@ export interface ResponseLog{
     agentId: AgentId;
     rejected: Rejection[];
     error?: string;
+    situation: string;
 }
-export function makeLLMPolicy(provider: LLMProvider, options: {temperature?: number; maxTokens: number; onResponse?:(log:ResponseLog) => void}):Policy {
+export function makeLLMPolicy(provider: Provider, options: {temperature?: number; maxTokens: number; onResponse?:(log:ResponseLog) => void}):Policy {
     return (observation, inbox, memory, signal) => {
         const prompt = buildPrompt(observation, inbox, memory);
         return provider.complete({ 
@@ -35,7 +36,8 @@ export function makeLLMPolicy(provider: LLMProvider, options: {temperature?: num
                 tick: observation.tick,
                 agentId: observation.self.id,
                 rejected: parsed.kind === "read" ? parsed.rejected : [],
-                error: errorMessage
+                error: errorMessage,
+                situation: prompt.messages[0]?.content ?? "",
             });
 
             if(parsed.kind === "unreadable"){
