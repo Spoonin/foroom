@@ -22,9 +22,12 @@ export interface LLMProvider{
     complete(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
 }
 
+// A canned answer: plain text, or text with how it ended (to test an answer cut off at maxTokens).
+export type MockAnswer = string | { text: string; stopReason: LLMResponse["stopReason"] };
+
 export class MockProvider implements LLMProvider{
     constructor(
-        private readonly answers: string[] | ((req: LLMRequest) => string), 
+        private readonly answers: MockAnswer[] | ((req: LLMRequest) => MockAnswer), 
         private readonly options?:{delayMs:number}
     ){}
     private curAnswerIndex = 0;
@@ -49,7 +52,7 @@ export class MockProvider implements LLMProvider{
             if (onAbort) signal?.removeEventListener("abort", onAbort);
         }
 
-        let curAnswer = "";
+        let curAnswer: MockAnswer;
         if(Array.isArray(this.answers)){
             const answer = this.answers[this.curAnswerIndex];
             if(answer === undefined){
@@ -61,13 +64,15 @@ export class MockProvider implements LLMProvider{
             curAnswer = this.answers(request);
         }
 
+        const { text, stopReason } = typeof curAnswer === "string" ? { text: curAnswer, stopReason: "end" as const } : curAnswer;
+
         return {
             model: "Mock model",
-            stopReason: "end",
-            text: curAnswer,
+            stopReason,
+            text,
             usage: {
                 inputTokens: Math.floor((request.messages.reduce((t, i) => t += i.content.length, 0) + request.system.length)/3),
-                outputTokens: Math.floor(curAnswer.length/3),
+                outputTokens: Math.floor(text.length/3),
             }
         }
     }

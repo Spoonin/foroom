@@ -55,17 +55,17 @@ describe("parseActions: reading the answer", () => {
 describe("parseActions: rejecting single actions", () => {
     it('rejects an unknown action type, by index', () => {
         expect(parseActions('{"actions":[{"type":"steal","amount":5}]}'))
-            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, error: mentions("type") }] });
+            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, value: { type: "steal", amount: 5 }, error: mentions("type") }] });
     });
 
     it('rejects a negative amount', () => {
         expect(parseActions('{"actions":[{"type":"harvest","amount":-5}]}'))
-            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, error: mentions("amount") }] });
+            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, value: { type: "harvest", amount: -5 }, error: mentions("amount") }] });
     });
 
     it('rejects a fractional amount: credits are whole', () => {
         expect(parseActions('{"actions":[{"type":"harvest","amount":300.5}]}'))
-            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, error: mentions("amount") }] });
+            .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, value: { type: "harvest", amount: 300.5 }, error: mentions("amount") }] });
     });
 
     it('reads an amount written as a string of digits', () => {
@@ -77,7 +77,7 @@ describe("parseActions: rejecting single actions", () => {
         'rejects the amount %s: only a plain string of digits is converted',
         (amount) => {
             expect(parseActions(`{"actions":[{"type":"harvest","amount":${amount}}]}`))
-                .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, error: mentions("amount") }] });
+                .toEqual({ kind: "read", actions: [], rejected: [{ index: 0, value: { type: "harvest", amount: JSON.parse(amount) }, error: mentions("amount") }] });
         },
     );
 
@@ -87,9 +87,9 @@ describe("parseActions: rejecting single actions", () => {
             kind: "read",
             actions: [{ type: "harvest", amount: 1 }],
             rejected: [
-                { index: 0, error: expect.any(String) },
-                { index: 2, error: expect.any(String) },
-                { index: 3, error: expect.any(String) },
+                { index: 0, value: null, error: expect.any(String) },
+                { index: 2, value: 5, error: expect.any(String) },
+                { index: 3, value: "harvest", error: expect.any(String) },
             ],
         });
     });
@@ -108,7 +108,7 @@ describe("parseActions: rejecting single actions", () => {
         expect(parseActions(text)).toEqual({
             kind: "read",
             actions: [{ type: "harvest", amount: 300 }, { type: "vote", proposalId: "p1", yes: true }],
-            rejected: [{ index: 1, error: mentions("amount") }],
+            rejected: [{ index: 1, value: { type: "gift", to: "b", amount: -5 }, error: mentions("amount") }],
         });
     });
 });

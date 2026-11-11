@@ -7,9 +7,11 @@ const ActionLike = z.looseObject({amount: z.optional(z.union([
   z.string().regex(/^\d+$/).transform(Number).pipe(Credits),
 ]))});
 
+export interface Rejection { index: number; value: unknown; error: string }
+
 type Parsed =
     | { kind: "unreadable"; error: string }
-    | { kind: "read"; actions: Action[]; rejected: { index: number; error: string }[] };
+    | { kind: "read"; actions: Action[]; rejected: Rejection[] };
 
 const MAX_INPUT_LENGTH = 20_000;
 
@@ -23,7 +25,7 @@ export function parseActions(text: string): Parsed{
     }
 
     const actions:Action[] = [];
-    const rejected: {index: number, error: string}[] = [];
+    const rejected: {index: number, value: unknown, error: string}[] = [];
     let json: string = "";
     const jsonFragment = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
     
@@ -59,7 +61,7 @@ export function parseActions(text: string): Parsed{
         const maybeAmountAction = ActionLike.safeParse(maybeAction);
 
         if(!maybeAmountAction.success){
-            rejected.push({index, error: z.prettifyError(maybeAmountAction.error)});
+            rejected.push({index, value: maybeAction, error: z.prettifyError(maybeAmountAction.error)});
         } else {
          
             const action = Action.safeParse(maybeAmountAction.data);
@@ -67,7 +69,7 @@ export function parseActions(text: string): Parsed{
             if(action.success){
                 actions.push(action.data);
             } else {
-                rejected.push({index, error: z.prettifyError(action.error)});
+                rejected.push({index, value: maybeAction, error: z.prettifyError(action.error)});
             }
         }
     });
