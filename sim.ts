@@ -10,6 +10,8 @@
 // provider: the model behind llm agents: mock | deepseek. deepseek needs DEEPSEEK_API_KEY in .env.
 // budget: the run's token limit (input + output); the run stops once it is spent.
 // Default: RUN_TOKEN_BUDGET from .env, else 300,000.
+// after-collapse: how many ticks the run goes on once the pool has collapsed; `all` runs on to
+// --ticks (or until everyone dies). Default: the Runner's (DEFAULT_TICKS_AFTER_COLLAPSE).
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -37,6 +39,7 @@ const { values } = parseArgs({
         policy: { type: "string", short: "p", default: "mixed" },
         provider: { type: "string", default: "mock" },
         budget: { type: "string" },
+        "after-collapse": { type: "string" },
     },
 });
 
@@ -52,6 +55,10 @@ function wholeNumber(name: string, raw: string, min: number): number {
 const ticks = wholeNumber("ticks", values.ticks, 0);
 const seed = wholeNumber("seed", values.seed, 0);
 const agents = wholeNumber("agents", values.agents, 1);
+const afterCollapse = values["after-collapse"];
+const ticksAfterCollapse = afterCollapse === undefined ? undefined
+    : afterCollapse === "all" ? Infinity
+    : wholeNumber("after-collapse", afterCollapse, 0);
 
 // A stand-in model that answers instantly and never breaks: each agent harvests 1% of its estimated
 // pool, read from its own situation text. Near K/2 that is about the regrowth shared out, so a
@@ -170,6 +177,7 @@ if (usesLLM) writeFileSync(transcript, JSON.stringify({ type: "system", text: bu
 try {
     const result = await runSimulation({
         seed, ticks, citizens, laws, signal: controller.signal,
+        ...(ticksAfterCollapse === undefined ? {} : { ticksAfterCollapse }),
         onTick: (report) => {
             if (report.tick % 10 === 0 || report.dead.size > 0) {
                 const deaths = [...report.dead].map(([id, why]) => `${id} (${why})`).join(", ");
