@@ -13,7 +13,7 @@ const laws: Laws = {
 const report = (overrides: Partial<Report> = {}): Report => ({
     tick: 4, P: 1234, collapsed: false,
     invalid: new Map(), charges: new Map(), harvested: new Map(), received: new Map(),
-    upkeep: new Map(), dead: new Map(),
+    upkeep: new Map(), dead: new Map(), gifts: [], outcomes: new Map(),
     ...overrides,
 });
 

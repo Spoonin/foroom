@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { laws } from "../src/config";
-import type { Laws, Message, Observation } from "../src/contracts";
+import type { Laws, Memory, Message, Observation } from "../src/contracts";
 import { makeLLMPolicy, type ResponseLog } from "../src/agents/llm/llmPolicy";
 import { buildPrompt } from "../src/agents/llm/prompt";
 import { MockProvider, type LLMProvider } from "../src/llm/provider";
@@ -38,12 +38,24 @@ describe("makeLLMPolicy: the request", () => {
         expect(provider.requests).toEqual([{ ...buildPrompt(observation, inbox), maxTokens: 321, temperature: 0.7 }]);
     });
 
+    it("puts the agent's memory into the prompt", async () => {
+        const provider = new MockProvider(['{"actions":[]}']);
+        const { policy } = setup(provider);
+        const observation = obs(5);
+        const memory: Memory = { outcomes: [{ tick: 4, giftsReceived: [{ from: "agent-01", amount: 50 }], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 } }] };
+
+        await policy(observation, inbox, memory);
+
+        expect(provider.requests[0]?.messages).toEqual(buildPrompt(observation, inbox, memory).messages);
+        expect(provider.requests[0]?.messages[0]?.content).toContain("agent-01 gave you 50 credits.");
+    });
+
     it("passes the signal on: an abort while the model thinks rejects with the abort reason", async () => {
         vi.useFakeTimers();
         const { policy, logs } = setup(new MockProvider(['{"actions":[]}'], { delayMs: 1_000 }));
         const thinking = new AbortController();
 
-        const answer = policy(obs(), [], thinking.signal);
+        const answer = policy(obs(), [], undefined, thinking.signal);
         const check = expect(answer).rejects.toBe("superseded by tick 6");
         await vi.advanceTimersByTimeAsync(100);
         thinking.abort("superseded by tick 6");

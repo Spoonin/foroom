@@ -397,3 +397,49 @@ it('upkeep plus the harvest fee, from the pool, is exactly enough to live', () =
     const state = starve(world(50_000, { a: agent(0) }), { a: [{ type: "harvest", amount: 200 }] }, 10);
     expect(state.agents.get("a")).toMatchObject({ balance: 0, hungerTicks: 0 });
 });
+
+// ---- outcomes: what each agent learns about its own actions ------------------------------------
+
+it('an outcome shows a scaled-down harvest: asked, got and net after the fee', () => {
+    // Harvestable is 50% of 100 = 50; demand is 100, so everyone gets half of what they asked.
+    const { report } = resolve(world(100, { a: agent(10), b: agent(10) }),
+        subs({ a: [{ type: "harvest", amount: 60 }], b: [{ type: "harvest", amount: 40 }] }), laws);
+    expect(report.outcomes.get("a")?.harvest).toEqual({ asked: 60, got: 30, net: 29 });
+    expect(report.outcomes.get("b")?.harvest).toEqual({ asked: 40, got: 20, net: 19 });
+});
+
+it('an outcome names who gave what, on both sides of a gift', () => {
+    const { report } = resolve(world(0, { x: agent(20), giver: agent(20), taker: agent(5) }, true),
+        subs({ x: [{ type: "gift", to: "taker", amount: 3 }], giver: [{ type: "gift", to: "taker", amount: 5 }] }), laws);
+    expect(report.outcomes.get("taker")?.giftsReceived).toEqual([{ from: "giver", amount: 5 }, { from: "x", amount: 3 }]);
+    expect(report.outcomes.get("giver")?.giftsSent).toEqual([{ to: "taker", amount: 5 }]);
+    expect(report.gifts).toEqual([
+        { from: "giver", to: "taker", amount: 5 },
+        { from: "x", to: "taker", amount: 3 },
+    ]);
+});
+
+it('an outcome lists the agent\'s ignored actions with their reasons', () => {
+    const ghostGift: WorldAction = { type: "gift", to: "ghost", amount: 5 };
+    const { report } = resolve(world(500, { a: agent(20) }), subs({ a: [ghostGift] }), laws);
+    expect(report.outcomes.get("a")?.ignored).toEqual([{ action: ghostGift, reason: "unknown recipient" }]);
+});
+
+it('an outcome has the agent\'s own facts only, and no harvest when it did not harvest', () => {
+    const { report } = resolve(world(500, { a: agent(20), b: agent(20), c: agent(20) }),
+        subs({ b: [{ type: "harvest", amount: 10 }, { type: "gift", to: "c", amount: 2 }] }), laws);
+    expect(report.outcomes.get("a")).toEqual({
+        tick: 0, giftsReceived: [], giftsSent: [], ignored: [], upkeep: { paid: 1, due: 1 },
+    });
+});
+
+it('an outcome shows upkeep paid against upkeep due', () => {
+    const { report } = resolve(world(0, { broke: agent(0) }, true), subs({}), laws);
+    expect(report.outcomes.get("broke")?.upkeep).toEqual({ paid: 0, due: 1 });
+});
+
+it('an agent that died this tick gets no outcome', () => {
+    const { report } = resolve(world(0, { starving: agent(0, 2), fed: agent(20) }, true), subs({}), laws);
+    expect(report.dead.has("starving")).toBe(true);
+    expect([...report.outcomes.keys()]).toEqual(["fed"]);
+});

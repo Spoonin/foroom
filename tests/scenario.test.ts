@@ -9,7 +9,7 @@ import { fairSharePolicy } from "../src/agents/policies/fairShare";
 import { greedyPolicy } from "../src/agents/policies/greedy";
 import { makeRandomPolicy } from "../src/agents/policies/random";
 import { deriveSeed, rng } from "../src/rng";
-import type { Laws, Policy } from "../src/contracts";
+import type { Laws, Outcome, Policy } from "../src/contracts";
 
 const laws: Laws = Object.freeze({
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
@@ -149,7 +149,7 @@ describe("in-flight policy calls", () => {
     it('a citizen that dies has its call aborted at once, while the others play on', async () => {
         // "hungry" never answers and has no savings, so it starves after starvationTicks.
         const hungrySignals: AbortSignal[] = [];
-        const hungry: Policy = (_o, _inbox, signal) => { hungrySignals.push(signal!); return new Promise(() => {}); };
+        const hungry: Policy = (_o, _inbox, _memory, signal) => { hungrySignals.push(signal!); return new Promise(() => {}); };
         const abortedAtDeath: boolean[] = [];
         const result = await runSimulation({
             seed: 1, ticks: 6, laws, turnDeadlineMs: 20, start: { balance: 0 },
@@ -163,7 +163,7 @@ describe("in-flight policy calls", () => {
 
     it('when the run ends, every call still in flight is aborted', async () => {
         const signals: AbortSignal[] = [];
-        const never: Policy = (_o, _inbox, signal) => { signals.push(signal!); return new Promise(() => {}); };
+        const never: Policy = (_o, _inbox, _memory, signal) => { signals.push(signal!); return new Promise(() => {}); };
         await runSimulation({ seed: 1, ticks: 2, laws, turnDeadlineMs: 10, citizens: all(never) });
         expect(signals).toHaveLength(2 * ids.length);
         expect(signals.every(s => s.aborted)).toBe(true);
@@ -220,5 +220,37 @@ describe("how a run ends", () => {
         const idle: Policy = () => [];
         expect((await runSimulation({ seed: 1, ticks: 50, citizens: all(idle), laws, start: { balance: 0 } })).endedBy).toBe("extinction");
         expect((await runSimulation({ seed: 1, ticks: 5, citizens: all(fairSharePolicy), laws, signal: AbortSignal.abort() })).endedBy).toBe("aborted");
+    });
+});
+
+describe("outcomes reach the agents", () => {
+    it('every tick, the policy already has the outcome of the tick before: Runner sends it before the next tick', async () => {
+        const seen: { tick: number; outcomeTicks: number[] }[] = [];
+        const remembering: Policy = (observation, inbox, memory) => {
+            if (observation.self.id === "a") {
+                seen.push({ tick: observation.tick, outcomeTicks: memory?.outcomes.map(o => o.tick) ?? [] });
+            }
+            return fairSharePolicy(observation, inbox);
+        };
+        await runSimulation({ seed: 1, ticks: 4, laws, citizens: all(remembering) });
+
+        expect(seen).toEqual([
+            { tick: 0, outcomeTicks: [] },
+            { tick: 1, outcomeTicks: [0] },
+            { tick: 2, outcomeTicks: [0, 1] },
+            { tick: 3, outcomeTicks: [0, 1, 2] },
+        ]);
+    });
+
+    it('the outcome is the agent\'s own: its harvest, as the World resolved it', async () => {
+        let lastSeen: Outcome | undefined;
+        const harvester: Policy = (observation, _inbox, memory) => {
+            if (observation.self.id === "a") lastSeen = memory?.outcomes.at(-1);
+            return [{ type: "harvest", amount: 500 }];
+        };
+        await runSimulation({ seed: 1, ticks: 2, laws, citizens: all(harvester) });
+
+        expect(lastSeen?.tick).toBe(0);
+        expect(lastSeen?.harvest).toEqual({ asked: 500, got: 500, net: 400 });
     });
 });

@@ -1,4 +1,4 @@
-import type { Laws, Message, Observation } from "../../contracts";
+import type { Laws, Memory, Message, Observation, Outcome, WorldAction } from "../../contracts";
 import type { LLMRequest } from "../../llm/provider";
 
 const credits = new Intl.NumberFormat("en-US").format;
@@ -50,7 +50,7 @@ Answer format:
 
 // This tick's situation, as the one user message. Everything here changes from tick to tick;
 // everything that does not belongs in buildSystemPrompt, so the system prompt stays cacheable.
-export function buildSituation(observation: Observation, inbox: readonly Message[]): string {
+export function buildSituation(observation: Observation, inbox: readonly Message[], memory?: Memory): string {
     const { tick, self, estimatedP, residents, laws } = observation;
     const others = residents.filter(id => id !== self.id);
 
@@ -68,11 +68,42 @@ export function buildSituation(observation: Observation, inbox: readonly Message
             ? "You are the only resident."
             : `Other residents (${others.length}): ${others.join(", ")}.`,
         "",
+        ...lastTickLines(memory?.outcomes.at(-1), tick),
         ...inboxLines(inbox),
         "",
         `Your actions for tick ${tick}:`,
     );
     return lines.join("\n");
+}
+
+// What happened to the agent's own actions on the previous tick, as plain facts. Nothing for the
+// first tick, or when the latest outcome is not from the tick just before this one.
+function lastTickLines(outcome: Outcome | undefined, tick: number): string[] {
+    if (!outcome || outcome.tick !== tick - 1) return [];
+    const lines = [`Last tick (${outcome.tick}):`];
+    const { harvest } = outcome;
+    if (harvest) {
+        const scaled = harvest.got < harvest.asked
+            ? " (all requests together were more than the pool allowed, so each was scaled down)"
+            : "";
+        lines.push(`You asked to harvest ${credits(harvest.asked)} and got ${credits(harvest.got)}${scaled}; ${credits(harvest.net)} after the fee.`);
+    } else {
+        lines.push("You did not harvest.");
+    }
+    for (const { from, amount } of outcome.giftsReceived) lines.push(`${from} gave you ${credits(amount)} credits.`);
+    for (const { to, amount } of outcome.giftsSent) lines.push(`You gave ${credits(amount)} credits to ${to}.`);
+    for (const { action, reason } of outcome.ignored) lines.push(`Ignored: ${describeAction(action)} (${reason}).`);
+    lines.push(`You paid ${credits(outcome.upkeep.paid)} of ${credits(outcome.upkeep.due)} credits upkeep.`);
+    lines.push("");
+    return lines;
+}
+
+function describeAction(action: WorldAction): string {
+    switch (action.type) {
+        case "harvest": return `harvest ${credits(action.amount)}`;
+        case "gift": return `gift of ${credits(action.amount)} to ${action.to}`;
+        default: return action.type;
+    }
 }
 
 // Sorted by (tick, from), never by arrival order: arrival order depends on scheduling, and the
@@ -88,9 +119,9 @@ function inboxLines(inbox: readonly Message[]): string[] {
 }
 
 // A whole turn's prompt. maxTokens and temperature are config, added by llmPolicy.
-export function buildPrompt(observation: Observation, inbox: readonly Message[]): Pick<LLMRequest, "system" | "messages"> {
+export function buildPrompt(observation: Observation, inbox: readonly Message[], memory?: Memory): Pick<LLMRequest, "system" | "messages"> {
     return {
         system: buildSystemPrompt(observation.laws),
-        messages: [{ role: "user", content: buildSituation(observation, inbox) }],
+        messages: [{ role: "user", content: buildSituation(observation, inbox, memory) }],
     };
 }

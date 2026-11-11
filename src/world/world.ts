@@ -2,7 +2,7 @@
 //
 
 import type { ServerRef, Supervisor } from "@cue/core";
-import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation } from "../contracts";
+import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation, type Outcome } from "../contracts";
 import { deriveSeed, rng, rngNormal } from "../rng";
 
 // Pure world functions (regrow, allocate, resolve) + a thin World actor on top of them.
@@ -147,9 +147,10 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
 
 // What each agent pays for its accepted actions, and what each recipient gets from gifts.
 // Harvest is not charged here: its fee comes out of the yield, see netHarvest.
-function chargeActions(validActions: Map<AgentId, WorldAction[]>, laws: Laws): { charges: Map<AgentId, number>; received: Map<AgentId, number> } {
+function chargeActions(validActions: Map<AgentId, WorldAction[]>, laws: Laws): { charges: Map<AgentId, number>; received: Map<AgentId, number>; gifts: Report["gifts"] } {
     const charges = new Map<AgentId, number>();
     const received = new Map<AgentId, number>();
+    const gifts: Report["gifts"] = [];
     for (const [id, actions] of validActions) {
         let totalCharge = 0;
         for (const action of actions) {
@@ -158,12 +159,17 @@ function chargeActions(validActions: Map<AgentId, WorldAction[]>, laws: Laws): {
             if (action.type === "gift") {
                 totalCharge += action.amount;
                 received.set(action.to, (received.get(action.to) ?? 0) + action.amount);
+                gifts.push({ from: id, to: action.to, amount: action.amount });
             }
         }
         charges.set(id, totalCharge);
     }
-    return { charges, received };
+    // Sorted, so the order does not depend on the order agents submitted in.
+    gifts.sort((a, b) => compareIds(a.from, b.from) || compareIds(a.to, b.to));
+    return { charges, received, gifts };
 }
+
+const compareIds = (a: AgentId, b: AgentId): number => (a < b ? -1 : a > b ? 1 : 0);
 
 // The harvest fee is deducted from what was actually taken, never paid in advance,
 // and never makes the result negative: a yield smaller than the fee nets 0.
@@ -196,7 +202,7 @@ export function nextHunger(hungerTicks: number, paidUpkeep: number, upkeep: numb
 
 export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldAction[]>, laws: Laws): {state: WorldState, report: Report} {
     const { valid, invalid } = validate(worldState, submissions, laws);
-    const { charges, received } = chargeActions(valid, laws);
+    const { charges, received, gifts } = chargeActions(valid, laws);
 
     // Separate harvest actions from other valid actions (validate allows at most one per agent).
     const harvestActions = new Map<AgentId, Harvest>();
@@ -239,6 +245,21 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         }
     }
 
+    // Each survivor's own view of the tick. Only its own facts: what others did stays private.
+    const outcomes = new Map<AgentId, Outcome>();
+    for (const id of newAgents.keys()) {
+        const asked = harvestActions.get(id)?.amount;
+        const got = grossHarvests.get(id) ?? 0;
+        outcomes.set(id, {
+            tick: worldState.tick,
+            ...(asked === undefined ? {} : { harvest: { asked, got, net: netHarvest(got, laws.prices.harvest) } }),
+            giftsReceived: gifts.filter(g => g.to === id).map(({ from, amount }) => ({ from, amount })),
+            giftsSent: gifts.filter(g => g.from === id).map(({ to, amount }) => ({ to, amount })),
+            ignored: [...(invalid.get(id) ?? [])],
+            upkeep: { paid: upkeepCharges.get(id) ?? 0, due: laws.upkeep },
+        });
+    }
+
     // Collapse is permanent: once collapsed, the world stays collapsed even if P rises again.
     // It is checked after harvest and before regrow, so a pool pushed below the threshold
     // does not get one more tick of growth.
@@ -262,9 +283,11 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
             charges,
             harvested: grossHarvests,
             received,
+            gifts,
             upkeep: upkeepCharges,
             dead,
             collapsed,
+            outcomes,
         }
     };
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Supervisor } from "@cue/core";
 import { spawnCitizen, type CitizenOptions } from "../src/agents/citizen";
-import type { Action, Laws, Observation, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
+import type { Action, Laws, Observation, Outcome, Policy, Submit, SubmitTarget, Tick, WorldAction } from "../src/contracts";
 
 const laws: Laws = {
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
@@ -82,7 +82,7 @@ describe("Citizen", () => {
         tick(3);
         await collector.received(1);
         expect(policy).toHaveBeenCalledTimes(1);
-        expect(policy).toHaveBeenCalledWith(obs(3), [], expect.any(AbortSignal));
+        expect(policy).toHaveBeenCalledWith(obs(3), [], { outcomes: [] }, expect.any(AbortSignal));
     });
 
     it('waits for an async policy and submits its result', async () => {
@@ -215,7 +215,7 @@ describe("Citizen", () => {
 
     it('a new tick aborts the previous call if it is still thinking', async () => {
         const signals: AbortSignal[] = [];
-        const policy = vi.fn<Policy>((_o, _inbox, signal) => {
+        const policy = vi.fn<Policy>((_o, _inbox, _memory, signal) => {
             signals.push(signal!);
             return signals.length === 1 ? new Promise(() => {}) : harvest(1); // tick 0 never answers
         });
@@ -230,7 +230,7 @@ describe("Citizen", () => {
 
     it('a call that already answered is not aborted by the next tick', async () => {
         const signals: AbortSignal[] = [];
-        const policy = vi.fn<Policy>((_o, _inbox, signal) => { signals.push(signal!); return harvest(1); });
+        const policy = vi.fn<Policy>((_o, _inbox, _memory, signal) => { signals.push(signal!); return harvest(1); });
         const { collector, tick } = start(policy);
 
         tick(0);
@@ -243,7 +243,7 @@ describe("Citizen", () => {
     it('aborting its lifetime aborts the call in flight', async () => {
         const lifetime = new AbortController();
         let seen: AbortSignal | undefined;
-        const policy = vi.fn<Policy>((_o, _inbox, signal) => { seen = signal; return new Promise(() => {}); });
+        const policy = vi.fn<Policy>((_o, _inbox, _memory, signal) => { seen = signal; return new Promise(() => {}); });
         const { tick } = start(policy, { lifetime: lifetime.signal });
 
         tick(0);
@@ -251,5 +251,56 @@ describe("Citizen", () => {
         expect(seen?.aborted).toBe(false);
         lifetime.abort(new Error("died"));
         expect(seen?.aborted).toBe(true);
+    });
+});
+
+describe("Citizen memory", () => {
+    const outcome = (tick: Tick): Outcome => ({
+        tick, giftsReceived: [], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 },
+    });
+
+    it('an outcome changes nothing at once: it is stored, and the next policy call gets it', async () => {
+        const policy = vi.fn<Policy>(() => []);
+        const { citizen, collector, tick } = start(policy);
+
+        tick(0);
+        await collector.received(1);
+        citizen.cast({ type: "outcome", outcome: outcome(0) });
+        await flushMicrotasks();
+        expect(policy).toHaveBeenCalledTimes(1); // storing an outcome does not run the policy
+        expect(collector.submits).toHaveLength(1); // nor submit anything
+
+        tick(1);
+        await collector.received(2);
+        expect(policy.mock.calls[1]?.[2]).toEqual({ outcomes: [outcome(0)] });
+    });
+
+    it('outcomes accumulate, oldest first', async () => {
+        const policy = vi.fn<Policy>(() => []);
+        const { citizen, collector, tick } = start(policy);
+
+        citizen.cast({ type: "outcome", outcome: outcome(0) });
+        citizen.cast({ type: "outcome", outcome: outcome(1) });
+        tick(2);
+        await collector.received(1);
+        expect(policy.mock.calls[0]?.[2]).toEqual({ outcomes: [outcome(0), outcome(1)] });
+    });
+
+    it('the policy gets a copy of the memory: changing it changes nothing in the Citizen', async () => {
+        // Records what each call saw, then empties the list it was given.
+        const seen: number[] = [];
+        const policy = vi.fn<Policy>((_o, _inbox, memory) => {
+            seen.push(memory?.outcomes.length ?? -1);
+            memory?.outcomes.splice(0);
+            return [];
+        });
+        const { citizen, collector, tick } = start(policy);
+
+        citizen.cast({ type: "outcome", outcome: outcome(0) });
+        tick(1);
+        await collector.received(1);
+        tick(2);
+        await collector.received(2);
+        expect(seen).toEqual([1, 1]);
     });
 });

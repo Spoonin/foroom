@@ -4,15 +4,20 @@
 // comes back as a `policyResults` or `policyFailed` message (pipeTo), and only then does the
 // Citizen send its one `submit` for that tick. So a slow (LLM) policy never blocks the mailbox.
 //
+// Between ticks it collects what happened to it: `outcome` (from the World, via Runner) goes into
+// its memory, and the next policy call gets that memory. Runner sends a tick's outcomes before it
+// starts the next tick, and one mailbox is FIFO, so the next tick always sees the last outcome.
+//
 // At most one policy call is in flight: a new tick aborts the previous one if it is still
 // thinking, so a slow model cannot pile up calls nobody will use.
 
 import { z } from "zod";
 import { pipeTo, type ServerRef, type Supervisor } from "@cue/core";
-import { PolicyOutput, type Action, type AgentId, type Message, type Observation, type Policy, type SubmitTarget, type Tick, type WorldAction } from "../contracts";
+import { PolicyOutput, type Action, type AgentId, type Memory, type Message, type Observation, type Outcome, type Policy, type SubmitTarget, type Tick, type WorldAction } from "../contracts";
 
 export type CitizenMsg =
     | { type: "tick"; observation: Observation; replyTo: SubmitTarget }
+    | { type: "outcome"; outcome: Outcome }
     | { type: "policyResults"; tick: Tick; results: Action[]; replyTo: SubmitTarget }
     | { type: "policyFailed"; tick: Tick; reason: string; replyTo: SubmitTarget };
 
@@ -27,6 +32,7 @@ interface CitizenState {
     id: AgentId;
     tick: Tick; // the latest tick it started deciding on; -1 before the first
     inbox: Message[]; // filled by `hear` in step 4
+    memory: Memory; // the agent's own history, appended to by `outcome`
     thinking?: AbortController; // the policy call for `tick`, until it settles
 }
 
@@ -38,7 +44,7 @@ const reasonOf = (error: unknown): string => (error instanceof Error ? error.mes
 export function spawnCitizen(system: Supervisor, id: AgentId, policy: Policy, options: CitizenOptions = {}): CitizenRef {
     const { lifetime } = options;
     const self = system.spawnServer<CitizenState, CitizenMsg>({
-        initialState: { id, tick: -1, inbox: [] },
+        initialState: { id, tick: -1, inbox: [], memory: { outcomes: [] } },
         handlers: {
             tick: (state, { observation, replyTo }) => {
                 const { tick } = observation;
@@ -49,9 +55,11 @@ export function spawnCitizen(system: Supervisor, id: AgentId, policy: Policy, op
                 const thinking = new AbortController();
                 const signal = lifetime ? AbortSignal.any([lifetime, thinking.signal]) : thinking.signal;
 
-                const inbox = [...state.inbox]; // the policy gets a copy, never the actor's own array
+                // The policy gets copies, never the actor's own arrays.
+                const inbox = [...state.inbox];
+                const memory: Memory = { outcomes: [...state.memory.outcomes] };
                 pipeTo(self)(
-                    () => policy(observation, inbox, signal),
+                    () => policy(observation, inbox, memory, signal),
                     (results) => {
                         // Checked here, so a bad value becomes a failed turn with a reason instead
                         // of crashing a handler later (which would only show up as a timeout).
@@ -64,6 +72,12 @@ export function spawnCitizen(system: Supervisor, id: AgentId, policy: Policy, op
                 );
                 return { ...state, tick, thinking };
             },
+
+            // Only stored: the policy reads it on the next tick. A handler never calls a model.
+            outcome: (state, { outcome }) => ({
+                ...state,
+                memory: { ...state.memory, outcomes: [...state.memory.outcomes, outcome] },
+            }),
 
             // A result for an older tick is late: Runner has already moved on, so it is dropped.
             policyResults: (state, { tick, results, replyTo }) => {

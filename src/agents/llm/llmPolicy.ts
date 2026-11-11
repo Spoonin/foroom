@@ -11,8 +11,8 @@ export interface ResponseLog{
     error?: string;
 }
 export function makeLLMPolicy(provider: LLMProvider, options: {temperature?: number; maxTokens: number; onResponse?:(log:ResponseLog) => void}):Policy {
-    return (observation, inbox, signal) => {
-        const prompt = buildPrompt(observation, inbox);
+    return (observation, inbox, memory, signal) => {
+        const prompt = buildPrompt(observation, inbox, memory);
         return provider.complete({ 
             maxTokens: options.maxTokens,
             temperature: options.temperature,

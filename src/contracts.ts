@@ -115,12 +115,30 @@ export type Submit = { type: "submit"; from: AgentId; tick: Tick; actions: World
 // Whatever receives a Submit: TurnCollector's ref, or a plain object in tests.
 export type SubmitTarget = { cast(msg: Submit): boolean };
 
+// What one agent learns about its own actions after a tick is resolved: only its own facts, never
+// what others harvested, gave or were refused. The World builds it (see resolve), Runner delivers
+// it to the Citizen as an `outcome` message, and the Citizen keeps it in its memory.
+export interface Outcome {
+    tick: Tick; // the tick it describes
+    harvest?: { asked: number; got: number; net: number }; // absent without a valid harvest; got < asked when demand was scaled down
+    giftsReceived: { from: AgentId; amount: number }[];
+    giftsSent: { to: AgentId; amount: number }[];
+    ignored: { action: WorldAction; reason: InvalidReason }[];
+    upkeep: { paid: number; due: number };
+}
+
+// An agent's own history, kept by its Citizen. Step 5 adds its actions, messages and rejections.
+export interface Memory {
+    outcomes: Outcome[]; // oldest first, one per tick the agent lived through
+}
+
 // A policy returns world and local actions mixed; Citizen splits them.
+// `memory` is the agent's own history (rule-based policies ignore it).
 // `signal` aborts when the answer is no longer wanted: the next tick has started, the agent died,
 // or the run stopped. A policy that calls a model passes it on to fetch, so the request (and its
 // tokens) stops too. Rule-based policies are instant and can ignore it.
 export interface Policy {
-    (observation: Observation, inbox: Message[], signal?: AbortSignal): Action[] | Promise<Action[]>;
+    (observation: Observation, inbox: Message[], memory?: Memory, signal?: AbortSignal): Action[] | Promise<Action[]>;
 }
 
 // What Citizen accepts back from a policy, checked at runtime: the static type is a promise the
@@ -186,9 +204,11 @@ export interface Report {
     charges: Map<AgentId, number>; // how much each agent paid for its actions this tick (prices + gift amounts)
     harvested: Map<AgentId, number>; // gross harvest taken from the pool, before the fee
     received: Map<AgentId, number>; // gifts received this tick
+    gifts: { from: AgentId; to: AgentId; amount: number }[]; // every gift that went through, sorted by (from, to)
     upkeep: Map<AgentId, number>; // upkeep actually charged (less than laws.upkeep when the agent could not pay)
     dead: Map<AgentId, DeathReason>; // which agents died this tick, and why
     collapsed: boolean; // whether the world is collapsed after this tick (stays true once set)
+    outcomes: Map<AgentId, Outcome>; // each survivor's own view of this tick; the dead get none
 }
 
 export interface Observation {

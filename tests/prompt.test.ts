@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { laws } from "../src/config";
-import type { Laws, Message, Observation } from "../src/contracts";
+import type { Laws, Memory, Message, Observation, Outcome } from "../src/contracts";
 import { buildPrompt, buildSituation, buildSystemPrompt } from "../src/agents/llm/prompt";
 import { parseActions } from "../src/agents/llm/parse";
 
@@ -172,14 +172,83 @@ describe("buildSituation", () => {
     });
 });
 
+describe("buildSituation: last tick", () => {
+    const outcome = (overrides: Partial<Outcome> = {}): Outcome => ({
+        tick: 4,
+        harvest: { asked: 1_500, got: 1_500, net: 1_400 },
+        giftsReceived: [],
+        giftsSent: [],
+        ignored: [],
+        upkeep: { paid: 100, due: 100 },
+        ...overrides,
+    });
+    const memory = (...outcomes: Outcome[]): Memory => ({ outcomes });
+    const lastTick = (text: string) => text.split("\n\n").find(part => part.startsWith("Last tick")) ?? "";
+
+    it("has no last-tick section without memory, or on the first tick", () => {
+        expect(buildSituation(obs(), [])).not.toContain("Last tick");
+        expect(buildSituation(obs({ tick: 0 }), [], memory())).not.toContain("Last tick");
+    });
+
+    it("tells only about the tick just before this one", () => {
+        expect(buildSituation(obs({ tick: 5 }), [], memory(outcome({ tick: 3 })))).not.toContain("Last tick");
+        expect(buildSituation(obs({ tick: 5 }), [], memory(outcome({ tick: 3 }), outcome({ tick: 4 })))).toContain("Last tick (4):");
+    });
+
+    it("states the harvest with formatted numbers, and says so when it was scaled down", () => {
+        const full = lastTick(buildSituation(obs(), [], memory(outcome())));
+        expect(full).toContain("You asked to harvest 1,500 and got 1,500; 1,400 after the fee.");
+        expect(full).not.toContain("scaled down");
+
+        const scaled = lastTick(buildSituation(obs(), [], memory(outcome({ harvest: { asked: 1_500, got: 900, net: 800 } }))));
+        expect(scaled).toContain("got 900 (all requests together were more than the pool allowed, so each was scaled down); 800 after the fee.");
+    });
+
+    it("says when the agent did not harvest", () => {
+        const { harvest: _, ...noHarvest } = outcome();
+        expect(lastTick(buildSituation(obs(), [], memory(noHarvest)))).toContain("You did not harvest.");
+    });
+
+    it("names who gave what, the agent's own gifts, ignored actions with reasons, and upkeep", () => {
+        const text = lastTick(buildSituation(obs(), [], memory(outcome({
+            giftsReceived: [{ from: "agent-01", amount: 50 }],
+            giftsSent: [{ to: "agent-03", amount: 1_200 }],
+            ignored: [{ action: { type: "gift", to: "agent-09", amount: 5 }, reason: "unknown recipient" }],
+            upkeep: { paid: 40, due: 100 },
+        }))));
+
+        expect(text).toContain("agent-01 gave you 50 credits.");
+        expect(text).toContain("You gave 1,200 credits to agent-03.");
+        expect(text).toContain("Ignored: gift of 5 to agent-09 (unknown recipient).");
+        expect(text).toContain("You paid 40 of 100 credits upkeep.");
+    });
+
+    it("comes before the messages", () => {
+        const text = buildSituation(obs(), [msg(4, "agent-01", "hi")], memory(outcome()));
+        expect(text.indexOf("Last tick")).toBeLessThan(text.indexOf("Messages:"));
+    });
+
+    it("stays neutral", () => {
+        const text = buildSituation(obs(), [], memory(outcome({
+            harvest: { asked: 1_500, got: 900, net: 800 },
+            giftsReceived: [{ from: "agent-01", amount: 50 }],
+            ignored: [{ action: { type: "harvest", amount: 5 }, reason: "duplicate" }],
+        })));
+        const words = wordsIn(text);
+        expect(BANNED_WORDS.filter(word => words.has(word))).toEqual([]);
+    });
+});
+
 describe("buildPrompt", () => {
     it("is the system prompt for the observation's laws plus one user message with the situation", () => {
         const observation = obs();
         const inbox = [msg(4, "agent-01", "hello")];
+        const memory: Memory = { outcomes: [{ tick: 4, giftsReceived: [], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 } }] };
 
-        expect(buildPrompt(observation, inbox)).toEqual({
+        expect(buildPrompt(observation, inbox, memory)).toEqual({
             system: buildSystemPrompt(observation.laws),
-            messages: [{ role: "user", content: buildSituation(observation, inbox) }],
+            messages: [{ role: "user", content: buildSituation(observation, inbox, memory) }],
         });
+        expect(buildPrompt(observation, inbox, memory).messages[0]?.content).toContain("Last tick (4):");
     });
 });

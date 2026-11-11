@@ -144,6 +144,11 @@ export async function runSimulation(options: RunOptions): Promise<RunResult> {
                 }
                 citizens.delete(id);
             }
+            // Before the next tick starts: each survivor's mailbox then holds its outcome ahead of
+            // the next `tick`, so the next policy call always sees what happened this tick.
+            for (const [id, outcome] of report.outcomes) {
+                citizens.get(id)?.ref.cast({ type: "outcome", outcome });
+            }
             collapsed = report.collapsed;
             if (collapsed && collapsedAt === null) collapsedAt = report.tick;
             lastTick = report.tick;
@@ -174,7 +179,9 @@ export function crashEventOf(letter: DeadLetter, agentOf: (actorId: string) => A
     const agent = agentOf(letter.childId);
     if (agent === undefined) return undefined;
     const message = letter.message as CitizenMsg;
-    const tick = message.type === "tick" ? message.observation.tick : message.tick;
+    const tick = message.type === "tick" ? message.observation.tick
+        : message.type === "outcome" ? message.outcome.tick
+        : message.tick;
     return { tick, kind: "crash", agent, reason: `${message.type} handler: ${reasonOf(letter.error)}` };
 }
 
