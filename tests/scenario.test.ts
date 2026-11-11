@@ -230,7 +230,7 @@ describe("outcomes reach the agents", () => {
         const seen: { tick: number; outcomeTicks: number[] }[] = [];
         const remembering: Policy = (observation, inbox, memory) => {
             if (observation.self.id === "a") {
-                seen.push({ tick: observation.tick, outcomeTicks: memory?.outcomes.map(o => o.tick) ?? [] });
+                seen.push({ tick: observation.tick, outcomeTicks: memory?.ticks.flatMap(r => (r.outcome ? [r.outcome.tick] : [])) ?? [] });
             }
             return fairSharePolicy(observation, inbox);
         };
@@ -247,7 +247,7 @@ describe("outcomes reach the agents", () => {
     it('the outcome is the agent\'s own: its harvest, as the World resolved it', async () => {
         let lastSeen: Outcome | undefined;
         const harvester: Policy = (observation, _inbox, memory) => {
-            if (observation.self.id === "a") lastSeen = memory?.outcomes.at(-1);
+            if (observation.self.id === "a") lastSeen = memory?.ticks.at(-1)?.outcome;
             return [{ type: "harvest", amount: 500 }];
         };
         await runSimulation({ seed: 1, ticks: 2, laws, citizens: all(harvester) });

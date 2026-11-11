@@ -5,9 +5,11 @@
 //   pnpm sim --ticks=20 --agents=5 --policy=llm --provider=mock
 //
 // policy: fair | greedy | random | llm | mixed (mixed cycles fair, greedy, random over the agents).
-//   pnpm sim --ticks=3 --agents=2 --policy=llm --provider=deepseek
+//   pnpm sim --ticks=3 --agents=2 --policy=llm --provider=deepseek --budget=50000
 //
 // provider: the model behind llm agents: mock | deepseek. deepseek needs DEEPSEEK_API_KEY in .env.
+// budget: the run's token limit (input + output); the run stops once it is spent.
+// Default: RUN_TOKEN_BUDGET from .env, else 300,000.
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -23,6 +25,7 @@ import { buildSystemPrompt } from "./src/agents/llm/prompt";
 import { laws } from "./src/config";
 import { MockProvider, type Provider, type LLMRequest } from "./src/llm/provider";
 import { OpenAICompatibleProvider } from "./src/llm/openaiCompatible";
+import { BudgetedProvider } from "./src/llm/budgeted";
 
 process.loadEnvFile();
 
@@ -33,6 +36,7 @@ const { values } = parseArgs({
         agents: { type: "string", short: "n", default: "5" },
         policy: { type: "string", short: "p", default: "mixed" },
         provider: { type: "string", default: "mock" },
+        budget: { type: "string" },
     },
 });
 
@@ -59,10 +63,11 @@ function mockAnswer(request: LLMRequest): string {
     return "```json\n" + JSON.stringify({ actions: [{ type: "harvest", amount }] }) + "\n```";
 }
 
-// Keys live in .env (git-ignored) and are read here only, never inside an adapter.
+// Keys and limits live in .env (git-ignored) and are read here only, never inside an adapter.
+try { process.loadEnvFile(); } catch { /* no .env file: fall back to the real environment */ }
+
 // A missing key stops the run before it starts, not as one 401 per agent on tick 0.
 function requireEnv(name: string): string {
-    try { process.loadEnvFile(); } catch { /* no .env file: fall back to the real environment */ }
     const value = process.env[name];
     if (!value) {
         console.error(`Missing ${name}: add it to .env (see .env.example).`);
@@ -88,7 +93,21 @@ if (!makeProvider) {
     console.error(`Invalid --provider=${values.provider}: expected one of ${Object.keys(providers).join(", ")}.`);
     process.exit(1);
 }
-const provider = makeProvider();
+
+// Ctrl+C, or the token budget running out, stops the run after the current tick's wait; the CSV
+// and the transcript are still written. The reason says which.
+const controller = new AbortController();
+process.once("SIGINT", () => { console.log("\nstopping…"); controller.abort(new Error("stopped with Ctrl+C")); });
+
+// Every llm call goes through the budget, whatever the model behind it.
+const budget = wholeNumber("budget", values.budget ?? process.env.RUN_TOKEN_BUDGET ?? "300000", 1);
+const budgeted = new BudgetedProvider(makeProvider(), {
+    maxTokens: budget,
+    onExhausted: (spent) => controller.abort(new Error(`token budget exhausted: ${spent} of ${budget} tokens spent`)),
+});
+const provider: Provider = budgeted;
+
+const reasonOf = (reason: unknown): string => (reason instanceof Error ? reason.message : String(reason));
 
 // One timestamp names every file of this run, so the CSV and the transcript pair up.
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -148,10 +167,6 @@ const citizens: CitizenSpec[] = Array.from({ length: agents }, (_, i) => {
 const usesLLM = kind === "llm";
 if (usesLLM) writeFileSync(transcript, JSON.stringify({ type: "system", text: buildSystemPrompt(laws) }) + "\n");
 
-// Ctrl+C stops the run after the current tick's wait, and the CSV is still written.
-const controller = new AbortController();
-process.once("SIGINT", () => { console.log("\nstopping…"); controller.abort(); });
-
 try {
     const result = await runSimulation({
         seed, ticks, citizens, laws, signal: controller.signal,
@@ -166,12 +181,13 @@ try {
     const file = `runs/${stamp}.csv`;
     writeFileSync(file, toCsv(tickRows(result.events, citizens.length)));
 
-    const why = { ticks: "", collapse: ` (stopped ${result.ticksRun - 1 - result.collapsedAt!} ticks after the collapse)`, extinction: " (everyone died)", aborted: " (stopped early)" }[result.endedBy];
+    const why = { ticks: "", collapse: ` (stopped ${result.ticksRun - 1 - result.collapsedAt!} ticks after the collapse)`, extinction: " (everyone died)", aborted: ` (stopped early: ${reasonOf(controller.signal.reason)})` }[result.endedBy];
     console.log(`\n${result.ticksRun} ticks${why}, ${result.survivors.length}/${citizens.length} alive, ` +
         `${result.collapsed ? `pool collapsed on tick ${result.collapsedAt}` : "pool alive"}. Wrote ${file}`);
     if (usesLLM) {
         const { calls, inputTokens, cachedInputTokens, outputTokens, unreadable, rejected } = llmTotals;
-        console.log(`LLM: ${calls} answers, ${inputTokens} input (${cachedInputTokens} cached) + ${outputTokens} output tokens, ` +
+        console.log(`LLM: ${calls} answers, ${inputTokens} input (${cachedInputTokens} cached) + ${outputTokens} output tokens ` +
+            `(${budgeted.spent} of the ${budget} budget), ` +
             `${unreadable} unreadable, ${rejected} actions rejected. Wrote ${transcript}`);
     }
 } catch (error) {

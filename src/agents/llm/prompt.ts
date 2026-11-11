@@ -1,4 +1,4 @@
-import type { Laws, Memory, Message, Observation, Outcome, WorldAction } from "../../contracts";
+import type { Laws, Memory, Message, Observation, Outcome, Say, WorldAction } from "../../contracts";
 import type { LLMRequest } from "../../llm/provider";
 
 const credits = new Intl.NumberFormat("en-US").format;
@@ -72,7 +72,7 @@ export function buildSituation(observation: Observation, inbox: readonly Message
             ? "You are the only resident."
             : `Other residents (${others.length}): ${others.join(", ")}.`,
         "",
-        ...lastTickLines(memory?.outcomes.at(-1), tick),
+        ...historyLines(memory),
         ...inboxLines(inbox),
         "",
         `Your actions for tick ${tick}:`,
@@ -80,11 +80,27 @@ export function buildSituation(observation: Observation, inbox: readonly Message
     return lines.join("\n");
 }
 
-// What happened to the agent's own actions on the previous tick, as plain facts. Nothing for the
-// first tick, or when the latest outcome is not from the tick just before this one.
-function lastTickLines(outcome: Outcome | undefined, tick: number): string[] {
-    if (!outcome || outcome.tick !== tick - 1) return [];
-    const lines = [`Last tick (${outcome.tick}):`];
+// The agent's own past ticks, oldest first: what it saw, what it did and said, what it was told
+// privately, and what came of it. Plain facts, no judgment. Nothing on the first tick.
+function historyLines(memory: Memory | undefined): string[] {
+    const ticks = memory?.ticks ?? [];
+    if (ticks.length === 0) return [];
+    const lines = [ticks.length === 1 ? "Your last tick:" : `Your last ${ticks.length} ticks (oldest first):`];
+    for (const record of ticks) {
+        lines.push(`Tick ${record.tick}: you saw the pool at about ${credits(record.estimatedP)} credits and had ${credits(record.balance)}.`);
+        const said = (record.actions ?? []).filter((a): a is Say => a.type === "say");
+        if (record.failure !== undefined) lines.push(`  Your answer was not used: ${record.failure}.`);
+        for (const { to, text } of said) lines.push(`  You said to ${to}: ${JSON.stringify(text)}`);
+        for (const m of record.privateMessages) lines.push(`  ${m.from} said to you: ${JSON.stringify(m.text)}`);
+        if (record.outcome) lines.push(...outcomeLines(record.outcome).map(line => `  ${line}`));
+    }
+    lines.push("");
+    return lines;
+}
+
+// What the World made of one tick's actions.
+function outcomeLines(outcome: Outcome): string[] {
+    const lines: string[] = [];
     const { harvest } = outcome;
     if (harvest) {
         const scaled = harvest.got < harvest.asked
@@ -98,7 +114,6 @@ function lastTickLines(outcome: Outcome | undefined, tick: number): string[] {
     for (const { to, amount } of outcome.giftsSent) lines.push(`You gave ${credits(amount)} credits to ${to}.`);
     for (const { action, reason } of outcome.ignored) lines.push(`Ignored: ${describeAction(action)} (${reason}).`);
     lines.push(`You paid ${credits(outcome.upkeep.paid)} of ${credits(outcome.upkeep.due)} credits upkeep.`);
-    lines.push("");
     return lines;
 }
 

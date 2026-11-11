@@ -84,7 +84,7 @@ describe("Citizen", () => {
         tick(3);
         await collector.received(1);
         expect(policy).toHaveBeenCalledTimes(1);
-        expect(policy).toHaveBeenCalledWith(obs(3), [], { outcomes: [] }, expect.any(AbortSignal));
+        expect(policy).toHaveBeenCalledWith(obs(3), [], { ticks: [] }, expect.any(AbortSignal));
     });
 
     it('waits for an async policy and submits its result', async () => {
@@ -269,9 +269,11 @@ describe("Citizen memory", () => {
     const outcome = (tick: Tick): Outcome => ({
         tick, giftsReceived: [], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 },
     });
+    const memoryOf = (policy: ReturnType<typeof vi.fn<Policy>>, call: number) => policy.mock.calls[call]?.[2];
 
-    it('an outcome changes nothing at once: it is stored, and the next policy call gets it', async () => {
-        const policy = vi.fn<Policy>(() => []);
+    it('keeps a record per tick: what it saw, what it chose, and the outcome, for the next policy call', async () => {
+        const chosen: Action[] = [{ type: "harvest", amount: 10 }, { type: "say", to: "all", text: "hi" }];
+        const policy = vi.fn<Policy>((o) => (o.tick === 0 ? chosen : []));
         const { citizen, collector, tick } = start(policy);
 
         tick(0);
@@ -279,40 +281,84 @@ describe("Citizen memory", () => {
         citizen.cast({ type: "outcome", outcome: outcome(0) });
         await flushMicrotasks();
         expect(policy).toHaveBeenCalledTimes(1); // storing an outcome does not run the policy
-        expect(collector.submits).toHaveLength(1); // nor submit anything
 
         tick(1);
         await collector.received(2);
-        expect(policy.mock.calls[1]?.[2]).toEqual({ outcomes: [outcome(0)] });
+        expect(memoryOf(policy, 0)).toEqual({ ticks: [] }); // nothing yet on the first tick
+        expect(memoryOf(policy, 1)).toEqual({ ticks: [{
+            tick: 0, estimatedP: 50_000, balance: 1000, actions: chosen, privateMessages: [], outcome: outcome(0),
+        }] });
     });
 
-    it('outcomes accumulate, oldest first', async () => {
+    it('a failed turn is remembered with its reason', async () => {
+        const policy = vi.fn<Policy>((o) => { if (o.tick === 0) throw new Error("boom"); return []; });
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        await collector.received(1);
+        tick(1);
+        await collector.received(2);
+        expect(memoryOf(policy, 1)?.ticks[0]).toMatchObject({ tick: 0, failure: "boom" });
+        expect(memoryOf(policy, 1)?.ticks[0]).not.toHaveProperty("actions");
+    });
+
+    it('a turn still thinking when the next tick starts is remembered as unanswered', async () => {
+        const policy = vi.fn<Policy>((o) => (o.tick === 0 ? new Promise(() => {}) : []));
+        const { collector, tick } = start(policy);
+
+        tick(0);
+        tick(1);
+        await collector.received(1);
+        expect(memoryOf(policy, 1)?.ticks[0]).toMatchObject({ tick: 0, failure: "no answer before the next tick" });
+    });
+
+    it('remembers private messages read on a tick, not broadcasts', async () => {
         const policy = vi.fn<Policy>(() => []);
         const { citizen, collector, tick } = start(policy);
+        const toMe: Message = { from: "b", to: "a", tick: 0, text: "psst" };
+        const toAll: Message = { from: "c", to: "all", tick: 0, text: "hello all" };
 
-        citizen.cast({ type: "outcome", outcome: outcome(0) });
-        citizen.cast({ type: "outcome", outcome: outcome(1) });
-        tick(2);
+        citizen.cast({ type: "hear", messages: [toMe, toAll] });
+        tick(1);
         await collector.received(1);
-        expect(policy.mock.calls[0]?.[2]).toEqual({ outcomes: [outcome(0), outcome(1)] });
+        tick(2);
+        await collector.received(2);
+        expect(memoryOf(policy, 1)?.ticks[0]?.privateMessages).toEqual([toMe]);
+    });
+
+    it('remembers only the last memoryTicks ticks, oldest first; an outcome for a forgotten tick is dropped', async () => {
+        const policy = vi.fn<Policy>(() => []);
+        const { citizen, collector, tick } = start(policy, { memoryTicks: 3 });
+
+        for (let t = 0; t < 5; t++) {
+            tick(t);
+            await collector.received(t + 1);
+        }
+        citizen.cast({ type: "outcome", outcome: outcome(0) }); // tick 0 is forgotten by now
+        tick(5);
+        await collector.received(6);
+        // At tick 5 it remembers ticks 2, 3 and 4: with tick 5's own record, that is 3.
+        expect(memoryOf(policy, 5)?.ticks.map(r => r.tick)).toEqual([2, 3, 4]);
+        expect(memoryOf(policy, 5)?.ticks.some(r => r.outcome)).toBe(false);
     });
 
     it('the policy gets a copy of the memory: changing it changes nothing in the Citizen', async () => {
         // Records what each call saw, then empties the list it was given.
         const seen: number[] = [];
         const policy = vi.fn<Policy>((_o, _inbox, memory) => {
-            seen.push(memory?.outcomes.length ?? -1);
-            memory?.outcomes.splice(0);
+            seen.push(memory?.ticks.length ?? -1);
+            memory?.ticks.splice(0);
             return [];
         });
-        const { citizen, collector, tick } = start(policy);
+        const { collector, tick } = start(policy);
 
-        citizen.cast({ type: "outcome", outcome: outcome(0) });
-        tick(1);
+        tick(0);
         await collector.received(1);
-        tick(2);
+        tick(1);
         await collector.received(2);
-        expect(seen).toEqual([1, 1]);
+        tick(2);
+        await collector.received(3);
+        expect(seen).toEqual([0, 1, 2]);
     });
 });
 

@@ -132,9 +132,23 @@ export interface Outcome {
     upkeep: { paid: number; due: number };
 }
 
-// An agent's own history, kept by its Citizen. Step 5 adds its actions, messages and rejections.
+// One tick of an agent's own history, as its Citizen saw it. Filled in over the tick: what the agent
+// saw when the tick started, then what it chose (or why its turn was empty), then what the World
+// made of it.
+export interface TickMemory {
+    tick: Tick;
+    estimatedP: number; // the pool estimate it was shown
+    balance: number; // its balance when the tick started
+    actions?: Action[]; // what it chose, world and local actions; absent if its turn was empty
+    failure?: string; // why its turn was empty: unreadable answer, no answer in time, …
+    privateMessages: Message[]; // messages to it alone, read on this tick (broadcasts are not kept)
+    outcome?: Outcome; // what the World made of its actions; absent until it arrives
+}
+
+// An agent's own history, kept by its Citizen: the last few ticks, oldest first. Older ticks are
+// forgotten for now; longer runs will fold them into a summary.
 export interface Memory {
-    outcomes: Outcome[]; // oldest first, one per tick the agent lived through
+    ticks: TickMemory[];
 }
 
 // A policy returns world and local actions mixed; Citizen splits them.

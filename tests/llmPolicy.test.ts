@@ -42,7 +42,8 @@ describe("makeLLMPolicy: the request", () => {
         const provider = new MockProvider(['{"actions":[]}']);
         const { policy } = setup(provider);
         const observation = obs(5);
-        const memory: Memory = { outcomes: [{ tick: 4, giftsReceived: [{ from: "agent-01", amount: 50 }], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 } }] };
+        const memory: Memory = { ticks: [{ tick: 4, estimatedP: 40_000, balance: 900, privateMessages: [],
+            outcome: { tick: 4, giftsReceived: [{ from: "agent-01", amount: 50 }], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 } } }] };
 
         await policy(observation, inbox, memory);
 
