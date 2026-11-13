@@ -33,9 +33,10 @@ export const Harvest = z.object({
 
 export type Harvest = z.infer<typeof Harvest>;
 
+// A per-agent harvest quota; `perAgent: null` proposes lifting the quota in force.
 export const Propose = z.object({
   type: z.literal("propose"),
-  rule: z.object({ kind: z.literal("quota"), perAgent: Credits }),
+  rule: z.object({ kind: z.literal("quota"), perAgent: Credits.nullable() }),
 });
 
 export const Vote = z.object({
@@ -48,6 +49,15 @@ export const Vote = z.object({
 export const Delegate = z.object({
   type: z.literal("delegate"),
   to: AgentId.nullable(),
+});
+
+// A vote on an open case against a caught violator: fine 0 spares, k ≥ 1 asks for a fine of
+// k × what the violator took over the quota. The upper limit is a law (maxFineMultiple), so it is
+// checked by World, like every other law.
+export const Judge = z.object({
+  type: z.literal("judge"),
+  caseId: z.string().min(1),
+  fine: Credits,
 });
 
 export const Pair = z.object({
@@ -71,7 +81,7 @@ export const Gift = z.object({
 
 // discriminatedUnion reads `type` first, then validates only the matching variant,
 // so an error says "harvest.amount is invalid" rather than "none of 6 variants matched".
-export const WorldAction = z.discriminatedUnion("type", [Harvest, Gift, Propose, Vote, Delegate, Pair, Spawn]);
+export const WorldAction = z.discriminatedUnion("type", [Harvest, Gift, Propose, Vote, Delegate, Judge, Pair, Spawn]);
 export type WorldAction = z.infer<typeof WorldAction>;
 
 // ---- Local actions: handled by Citizen itself, free ------------------------------------------
@@ -130,6 +140,8 @@ export interface Outcome {
     giftsSent: { to: AgentId; amount: number }[];
     ignored: { action: WorldAction; reason: InvalidReason }[];
     upkeep: { paid: number; due: number };
+    caught?: { took: number; quota: number }; // took more than the quota and was caught: now on the public list
+    fines?: { caseId: string; due: number; paid: number }[]; // verdicts against it, taken after upkeep
 }
 
 // One tick of an agent's own history, as its Citizen saw it. Filled in over the tick: what the agent
@@ -184,12 +196,17 @@ export interface Laws {
         propose: number;
         vote: number;
         delegate: number;
+        judge: number; // a vote on a case
         pair: number;
         spawn: number;
     };
     starvationTicks: number; // number of ticks an agent can survive without food before dying
     maxMessagesPerTick: number; // messages one agent can send per tick ("all" counts as one); the rest are dropped
     maxMessageChars: number; // longest message text; a longer one is dropped, not cut
+    quorum: number; // share of the electorate that must vote (directly or by delegation) for a vote to count
+    punishShare: number; // share of the votes cast needed to fine a caught violator
+    detectionChance: number; // chance that taking more than the quota is caught and listed
+    maxFineMultiple: number; // a fine vote is k × the excess, k from 1 to this
 }
 
 // What an agent may know about itself. Everything here can be shown in Observation.self,
@@ -200,12 +217,46 @@ export interface AgentState {
     hungerTicks: number; // number of ticks the agent has gone without food
 }
 
+// The forum part of WorldState (see world/forum.ts and STEPS.md, step 4, "Forum rules").
+export interface Proposal {
+    id: string; // p-<tick>-<n>, made by World, never by a model
+    by: AgentId;
+    tick: Tick; // when it was proposed; voted on the next tick
+    perAgent: number | null; // the quota; null lifts it
+}
+
+// A caught violator's case, open until a fine is taken (or the accused dies).
+export interface Case {
+    id: string; // c-<tick>-<agent>
+    agent: AgentId; // the accused
+    tick: Tick; // the tick of the violation
+    took: number; // gross harvest that tick
+    quota: number; // the quota in force that tick
+}
+
+export interface ForumState {
+    quota: number | null; // the per-agent harvest quota in force; null: none
+    proposals: Proposal[]; // made last tick, voted on this tick
+    cases: Case[]; // the public list of caught violators
+    delegations: Map<AgentId, AgentId>; // who hands their vote to whom; stays until changed
+}
+
+// Last tick's public forum results, shown to everyone. Individual votes stay secret: only totals.
+export interface ForumNews {
+    tick: Tick;
+    proposals: (Proposal & { yes: number; no: number; passed: boolean })[];
+    adopted: Proposal | null;
+    verdicts: { caseId: string; agent: AgentId; punish: number; spare: number; fine: number; paid: number }[];
+}
+
 export interface WorldState {
     seed: number; // the run seed: every random draw in the world is derived from it (see observe)
     tick: Tick;
     P: number; // pool size, in credits
     collapsed: boolean,
     agents: Map<AgentId, AgentState>;
+    forum: ForumState;
+    news: ForumNews | null; // what the last resolve decided; null before the first
     // Hidden from agents: the tick count each agent lives, after which it dies of old age.
     // Kept apart from AgentState so that copying an agent's state can never leak it.
     lifespans: Map<AgentId, number>;
@@ -213,7 +264,9 @@ export interface WorldState {
 
 export type Citizen = {id: AgentId } & AgentState;
 
-export type InvalidReason = "dead" | "insufficient funds" | "duplicate" | "negative amount" | "not whole credits" | "unknown recipient";
+export type InvalidReason =
+    | "dead" | "insufficient funds" | "duplicate" | "negative amount" | "not whole credits" | "unknown recipient"
+    | "unknown proposal" | "unknown case" | "own case" | "fine out of range" | "not alive" | "to self";
 export type DeathReason = "hunger" | "age";
 
 // What World tells Runner after a tick. Runner is an observer, not an agent, so this may contain
@@ -230,6 +283,19 @@ export interface Report {
     dead: Map<AgentId, DeathReason>; // which agents died this tick, and why
     collapsed: boolean; // whether the world is collapsed after this tick (stays true once set)
     outcomes: Map<AgentId, Outcome>; // each survivor's own view of this tick; the dead get none
+    forum: ForumReport;
+}
+
+// What the forum did this tick. Observer data, like the rest of Report: it names voters.
+export interface ForumReport {
+    proposed: Proposal[]; // made this tick, voted on next tick
+    votes: { agent: AgentId; proposalId: string; yes: boolean }[]; // direct votes, sorted
+    judgements: { agent: AgentId; caseId: string; fine: number }[]; // direct case votes, sorted
+    delegations: { agent: AgentId; to: AgentId | null }[]; // changes made this tick, sorted
+    news: ForumNews; // tallies, the adopted quota, verdicts
+    quota: number | null; // the quota in force after this tick
+    caught: Case[]; // new cases opened this tick
+    fines: Map<AgentId, number>; // fines actually taken this tick (they go to the pool)
 }
 
 export interface Observation {
@@ -239,4 +305,14 @@ export interface Observation {
     residents: AgentId[]; // the living agents' ids, sorted, self included: whom a gift or message can go to
     estimatedP: number;
     laws: Laws;
+    forum: ForumView;
+}
+
+// The public forum, as every citizen sees it, plus its own delegation.
+export interface ForumView {
+    quota: number | null; // in force this tick
+    proposals: Proposal[]; // open for voting this tick
+    cases: Case[]; // the public list of caught violators, each open for judging this tick
+    myDelegate: AgentId | null;
+    news: ForumNews | null; // what was decided last tick
 }

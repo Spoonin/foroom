@@ -1,3 +1,4 @@
+import { emptyForum } from "../src/world/forum";
 import { it, expect } from "vitest";
 import { regrow, allocate, resolve, netHarvest, observe } from "../src/world/world";
 import type { WorldAction, WorldState } from "../src/contracts";
@@ -91,12 +92,17 @@ const laws = Object.freeze({
         propose: 10,
         vote: 1,
         delegate: 1,
+        judge: 0,
         pair: 5,
         spawn: 20
     },
     starvationTicks: 3,
     maxMessagesPerTick: 3,
     maxMessageChars: 300,
+    quorum: 0.5,
+    punishShare: 2 / 3,
+    detectionChance: 0.5,
+    maxFineMultiple: 3,
 });
 
 it('resolves world state correctly with valid actions', () => {
@@ -110,6 +116,8 @@ it('resolves world state correctly with valid actions', () => {
             ["agent2", { age: 1, balance: 100, hungerTicks: 0 }]
         ]),
         lifespans: new Map([["agent1", 10], ["agent2", 10]]),
+        forum: emptyForum(),
+        news: null,
     };
 
     const submissions = new Map([
@@ -134,6 +142,8 @@ it('agent with insufficient funds can harvest', () => {
             ["rich", { age: 1, balance: 100, hungerTicks: 0 }]
         ]),
         lifespans: new Map([["poor", 10], ["rich", 10]]),
+        forum: emptyForum(),
+        news: null,
     };
 
     const submissions = new Map([
@@ -160,6 +170,8 @@ it('agent dies after 3 ticks of hunger', () => {
             ["rich", { age: 1, balance: 100, hungerTicks: 0 }]
         ]),
         lifespans: new Map([["poor", 10], ["rich", 10]]),
+        forum: emptyForum(),
+        news: null,
     };
 
     const submissions = new Map([
@@ -186,6 +198,8 @@ const world = (P: number, agents: Record<string, ReturnType<typeof agent>>, coll
     seed: 1, tick: 0, P, collapsed,
     agents: new Map(Object.entries(agents)),
     lifespans: new Map(Object.keys(agents).map(id => [id, 100])),
+    forum: emptyForum(),
+    news: null,
 });
 const subs = (m: Record<string, WorldAction[]>) => new Map(Object.entries(m));
 
@@ -220,7 +234,9 @@ it('an agent with savings and no income is not starving', () => {
 
 it('several paid actions together cannot exceed the balance, and the balance never goes negative', () => {
     const votes: WorldAction[] = ["p", "q", "r"].map(proposalId => ({ type: "vote", proposalId, yes: true }));
-    const { state, report } = resolve(world(500, { a: agent(2) }), subs({ a: votes }), laws);
+    const start = world(500, { a: agent(2) });
+    start.forum.proposals = ["p", "q", "r"].map(id => ({ id, by: "a", tick: 0, perAgent: 10 }));
+    const { state, report } = resolve(start, subs({ a: votes }), laws);
     expect(report.charges.get("a")).toBe(2);
     expect(report.invalid.get("a")?.map(i => i.reason)).toEqual(["insufficient funds"]);
     expect(state.agents.get("a")?.balance).toBe(0); // 2 − 2 votes − upkeep clamped to what is left

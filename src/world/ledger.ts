@@ -33,7 +33,18 @@ export type LedgerEvent =
     // per message, not per recipient: `to: "all"` reached every living resident but the sender.
     | { tick: Tick; kind: "message"; agent: AgentId; to: AgentId | "all"; text: string }
     // Written by Runner: a message that was not delivered, and why.
-    | { tick: Tick; kind: "messageDropped"; agent: AgentId; to: AgentId | "all"; reason: DropReason };
+    | { tick: Tick; kind: "messageDropped"; agent: AgentId; to: AgentId | "all"; reason: DropReason }
+    // The forum (step 4). Individual votes are recorded here for metrics (power concentration);
+    // agents only ever see totals.
+    | { tick: Tick; kind: "delegated"; agent: AgentId; to: AgentId | null }
+    | { tick: Tick; kind: "voted"; agent: AgentId; proposalId: string; yes: boolean }
+    | { tick: Tick; kind: "judged"; agent: AgentId; caseId: string; fine: number }
+    | { tick: Tick; kind: "proposed"; agent: AgentId; proposalId: string; perAgent: number | null }
+    | { tick: Tick; kind: "tallied"; proposalId: string; yes: number; no: number; passed: boolean }
+    | { tick: Tick; kind: "adopted"; proposalId: string; perAgent: number | null }
+    | { tick: Tick; kind: "caught"; agent: AgentId; caseId: string; took: number; quota: number }
+    // One per open case judged this tick, punished or not. `agent` is the accused.
+    | { tick: Tick; kind: "verdict"; agent: AgentId; caseId: string; punish: number; spare: number; fine: number; paid: number };
 // Later steps add kinds here: "values" (step 3), "birth" (step 6), ...
 
 export type LedgerKind = LedgerEvent["kind"];
@@ -68,6 +79,19 @@ export function eventsFromReport(report: Report): LedgerEvent[] {
     for (const [agent, reason] of byId(report.dead)) {
         events.push({ tick, kind: "death", agent, reason });
     }
+
+    // The forum, in the order it happens within a tick. Each list is already sorted by World.
+    const { forum } = report;
+    for (const { agent, to } of forum.delegations) events.push({ tick, kind: "delegated", agent, to });
+    for (const { agent, proposalId, yes } of forum.votes) events.push({ tick, kind: "voted", agent, proposalId, yes });
+    for (const { agent, caseId, fine } of forum.judgements) events.push({ tick, kind: "judged", agent, caseId, fine });
+    for (const { id, yes, no, passed } of forum.news.proposals) events.push({ tick, kind: "tallied", proposalId: id, yes, no, passed });
+    if (forum.news.adopted) events.push({ tick, kind: "adopted", proposalId: forum.news.adopted.id, perAgent: forum.news.adopted.perAgent });
+    for (const v of forum.news.verdicts) {
+        events.push({ tick, kind: "verdict", agent: v.agent, caseId: v.caseId, punish: v.punish, spare: v.spare, fine: v.fine, paid: v.paid });
+    }
+    for (const p of forum.proposed) events.push({ tick, kind: "proposed", agent: p.by, proposalId: p.id, perAgent: p.perAgent });
+    for (const c of forum.caught) events.push({ tick, kind: "caught", agent: c.agent, caseId: c.id, took: c.took, quota: c.quota });
     return events;
 }
 

@@ -22,6 +22,7 @@ export const laws = readonly<Laws>({
         propose: 1000,
         vote: 100,
         delegate: 100,
+        judge: 0, // judging a case is free (STEPS.md, step 4)
         pair: 500,
         spawn: 2000,
     }),
@@ -29,4 +30,10 @@ export const laws = readonly<Laws>({
     // Free talk is bounded by volume, not credits: equal volume means equal voice (PLAN.md).
     maxMessagesPerTick: 3,
     maxMessageChars: 300,
+    // The forum (STEPS.md, step 4): a vote needs half the living; a fine needs two thirds of the
+    // votes cast; half of all violations are caught.
+    quorum: 0.5,
+    punishShare: 2 / 3,
+    detectionChance: 0.5,
+    maxFineMultiple: 3,
 });

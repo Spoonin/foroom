@@ -6,16 +6,21 @@ import type { Laws, Report, WorldAction } from "../src/contracts";
 
 const laws: Laws = {
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
-    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
+    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, judge: 0, pair: 500, spawn: 2000 },
     starvationTicks: 3,
     maxMessagesPerTick: 3,
     maxMessageChars: 300,
+    quorum: 0.5,
+    punishShare: 2 / 3,
+    detectionChance: 0.5,
+    maxFineMultiple: 3,
 };
 
 const report = (overrides: Partial<Report> = {}): Report => ({
     tick: 4, P: 1234, collapsed: false,
     invalid: new Map(), charges: new Map(), harvested: new Map(), received: new Map(),
     upkeep: new Map(), dead: new Map(), gifts: [], outcomes: new Map(),
+    forum: { proposed: [], votes: [], judgements: [], delegations: [], news: { tick: 4, proposals: [], adopted: null, verdicts: [] }, quota: null, caught: [], fines: new Map() },
     ...overrides,
 });
 

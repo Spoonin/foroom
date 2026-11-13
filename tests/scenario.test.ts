@@ -13,10 +13,14 @@ import type { Action, Laws, Outcome, Policy } from "../src/contracts";
 
 const laws: Laws = Object.freeze({
     r: 0.1, K: 100_000, collapseAt: 0.1, maxHarvestFraction: 0.5, sigma: 0.05, upkeep: 100,
-    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
+    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, judge: 0, pair: 500, spawn: 2000 },
     starvationTicks: 3,
     maxMessagesPerTick: 3,
     maxMessageChars: 300,
+    quorum: 0.5,
+    punishShare: 2 / 3,
+    detectionChance: 0.5,
+    maxFineMultiple: 3,
 });
 
 const ids = ["a", "b", "c", "d", "e"];

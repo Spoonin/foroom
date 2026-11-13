@@ -316,3 +316,11 @@ None at the moment: all current ones are resolved, see below.
   thinking, and death or the end of the run cancels it too.
 - An agent's broken output (invalid actions) is an empty turn, recorded with its reason. A failure
   is data for the experiment, never a crash of the run.
+
+## After foroom: spinoff ideas
+- **A Mafia benchmark across models** (Anthropic, OpenAI, Gemini, Kimi, DeepSeek, Qwen…), started
+  only once foroom is finished. Mixed tables with seats and roles rotated; ratings per role
+  (deception, detection, persuasion), not only win rate; a deterministic code moderator; anonymous
+  players. Reuses the providers, the budget, parsing and the forum's voting, extracted into a
+  shared package then, not before. Main constraints: cost (about 0.5M tokens per game), variance
+  (hundreds of games per comparison), and whether to compare with reasoning on or off.

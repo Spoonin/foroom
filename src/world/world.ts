@@ -1,9 +1,17 @@
 // world.ts — see STEPS.md, step 2 (forum — step 4, births — step 6).
 //
+// One tick of resolve, in order:
+//   1. validate every action against the state at the start of the tick; charge prices and gifts
+//   2. forum, before harvest: delegations change → proposals are tallied (an adopted quota is in
+//      force from the next tick) → open cases are judged → this tick's proposals open
+//   3. harvest; who took more than the quota in force is caught with laws.detectionChance
+//   4. per agent: charges → income → upkeep → fines (after upkeep, down to 0 at most) → hunger → age
+//   5. fines go to the pool; collapse check; regrowth
 
 import type { ServerRef, Supervisor } from "@cue/core";
-import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation, type Outcome } from "../contracts";
+import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation, type Outcome, type Case, type ForumNews, type ForumReport, type ForumState, type Proposal } from "../contracts";
 import { deriveSeed, rng, rngNormal } from "../rng";
+import { detectViolations, emptyForum, judgeCase, tallyProposals } from "./forum";
 
 // Pure world functions (regrow, allocate, resolve) + a thin World actor on top of them.
 // Credits are integers, so growth is floored. With K in the hundreds of thousands, growth near the
@@ -79,7 +87,9 @@ function creditAmounts(action: WorldAction): number[] {
         case "spawn":
             return [action.endowment];
         case "propose":
-            return [action.rule.perAgent];
+            return action.rule.perAgent === null ? [] : [action.rule.perAgent];
+        case "judge":
+            return [action.fine];
         default:
             return [];
     }
@@ -100,6 +110,8 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
         // so several actions together can never cost more than the balance.
         let available = agent.balance;
         let hasHarvest = false;
+        let hasDelegate = false;
+        const votedOn = new Set<string>(); // proposal and case ids this agent already voted on
 
         for (const action of actions) {
             // Rule-based policies do not go through zod, so check credit amounts here too.
@@ -115,6 +127,11 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
             }
             if (action.type === "gift" && !state.agents.has(action.to)) {
                 upsert(invalid, id, action, "unknown recipient");
+                continue;
+            }
+            const forumProblem = forumCheck(state, id, action, laws, votedOn, hasDelegate);
+            if (forumProblem) {
+                upsert(invalid, id, action, forumProblem);
                 continue;
             }
             if (action.type === "harvest") {
@@ -135,6 +152,9 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
             }
 
             // If we reach here, the action is valid.
+            if (action.type === "vote") votedOn.add(action.proposalId);
+            if (action.type === "judge") votedOn.add(action.caseId);
+            if (action.type === "delegate") hasDelegate = true;
             if (!valid.has(id)) {
                 valid.set(id, []);
             }
@@ -143,6 +163,86 @@ function validate(state: WorldState, submissions: Map<AgentId, WorldAction[]>, l
     }
 
     return { valid, invalid };
+}
+
+// Forum actions are checked against the forum at the start of the tick: a vote only on a proposal
+// that is open now, a case vote only on a listed case (not one's own), one vote per proposal or
+// case, one delegation change per tick, to a living agent other than oneself.
+function forumCheck(
+    state: WorldState, id: AgentId, action: WorldAction, laws: Laws, votedOn: ReadonlySet<string>, hasDelegate: boolean,
+): InvalidReason | null {
+    switch (action.type) {
+        case "vote":
+            if (!state.forum.proposals.some(p => p.id === action.proposalId)) return "unknown proposal";
+            return votedOn.has(action.proposalId) ? "duplicate" : null;
+        case "judge": {
+            const open = state.forum.cases.find(c => c.id === action.caseId);
+            if (!open) return "unknown case";
+            if (open.agent === id) return "own case";
+            if (action.fine > laws.maxFineMultiple) return "fine out of range";
+            return votedOn.has(action.caseId) ? "duplicate" : null;
+        }
+        case "delegate":
+            if (hasDelegate) return "duplicate";
+            if (action.to === id) return "to self";
+            return action.to !== null && !state.agents.has(action.to) ? "not alive" : null;
+        default:
+            return null;
+    }
+}
+
+// The forum's part of a tick before harvest (see the order at the top of this file): this tick's
+// delegation changes apply first, so they count in this tick's votes; then the proposals opened
+// last tick are tallied, and the listed cases judged. The electorate is everyone alive at the
+// start of the tick.
+function forumBeforeHarvest(state: WorldState, valid: Map<AgentId, WorldAction[]>, laws: Laws) {
+    const delegations = new Map(state.forum.delegations);
+    const votes = new Map<string, Map<AgentId, boolean>>();
+    const judgements = new Map<string, Map<AgentId, number>>();
+    const proposed: Proposal[] = [];
+    const report: Pick<ForumReport, "votes" | "judgements" | "delegations"> = { votes: [], judgements: [], delegations: [] };
+
+    for (const id of [...valid.keys()].sort(compareIds)) {
+        for (const action of valid.get(id)!) {
+            switch (action.type) {
+                case "delegate":
+                    if (action.to === null) delegations.delete(id);
+                    else delegations.set(id, action.to);
+                    report.delegations.push({ agent: id, to: action.to });
+                    break;
+                case "vote":
+                    if (!votes.has(action.proposalId)) votes.set(action.proposalId, new Map());
+                    votes.get(action.proposalId)!.set(id, action.yes);
+                    report.votes.push({ agent: id, proposalId: action.proposalId, yes: action.yes });
+                    break;
+                case "judge":
+                    if (!judgements.has(action.caseId)) judgements.set(action.caseId, new Map());
+                    judgements.get(action.caseId)!.set(id, action.fine);
+                    report.judgements.push({ agent: id, caseId: action.caseId, fine: action.fine });
+                    break;
+                case "propose":
+                    proposed.push({ id: `p-${state.tick}-${proposed.length}`, by: id, tick: state.tick, perAgent: action.rule.perAgent });
+                    break;
+            }
+        }
+    }
+
+    const electorate = [...state.agents.keys()].sort(compareIds);
+    const { adopted, results } = tallyProposals(state.forum.proposals, votes, electorate, delegations, laws);
+    const verdicts = state.forum.cases.map(c => ({
+        case: c,
+        verdict: judgeCase({ agent: c.agent, took: c.took, quota: c.quota }, judgements.get(c.id) ?? new Map(), electorate, delegations, laws),
+    }));
+
+    return {
+        delegations,
+        proposed,
+        adopted,
+        quota: adopted ? adopted.perAgent : state.forum.quota,
+        results,
+        verdicts,
+        report,
+    };
 }
 
 // What each agent pays for its accepted actions, and what each recipient gets from gifts.
@@ -170,6 +270,9 @@ function chargeActions(validActions: Map<AgentId, WorldAction[]>, laws: Laws): {
 }
 
 const compareIds = (a: AgentId, b: AgentId): number => (a < b ? -1 : a > b ? 1 : 0);
+
+const caughtOutcome = (violation: { took: number; quota: number } | undefined): Pick<Outcome, "caught"> =>
+    violation ? { caught: { took: violation.took, quota: violation.quota } } : {};
 
 // The harvest fee is deducted from what was actually taken, never paid in advance,
 // and never makes the result negative: a yield smaller than the fee nets 0.
@@ -214,7 +317,23 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         }
     }
 
+    const forum = forumBeforeHarvest(worldState, valid, laws);
+
     const { remaining: afterHarvestP, gross: grossHarvests } = harvest(worldState, harvestActions, laws);
+
+    // Taking more than the quota in force is not stopped, only sometimes caught. One stream per
+    // tick, derived from the run seed, so the same seed catches the same agents.
+    const detect = rng(deriveSeed(worldState.seed, `detect:${worldState.tick}`));
+    const caughtNow = detectViolations(grossHarvests, worldState.forum.quota, detect, laws);
+
+    // Fines due this tick, per accused, in case order: verdicts with a fine.
+    const finesDue = new Map<AgentId, { caseId: string; due: number }[]>();
+    for (const { case: c, verdict } of forum.verdicts) {
+        if (verdict.fine <= 0) continue;
+        if (!finesDue.has(c.agent)) finesDue.set(c.agent, []);
+        finesDue.get(c.agent)!.push({ caseId: c.id, due: verdict.fine });
+    }
+    const finesPaid = new Map<AgentId, { caseId: string; due: number; paid: number }[]>();
 
     // Apply everything per agent, in this order: action charges → income → upkeep → hunger → age.
     const newAgents = new Map<AgentId, AgentState>();
@@ -226,7 +345,19 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         const beforeUpkeep = agent.balance - (charges.get(id) ?? 0) + income;
         const paidUpkeep = upkeepCharge(beforeUpkeep, laws.upkeep);
         upkeepCharges.set(id, paidUpkeep);
-        const balance = Math.max(0, beforeUpkeep - paidUpkeep);
+        let balance = Math.max(0, beforeUpkeep - paidUpkeep);
+
+        // Fines come after upkeep, so a fine alone never makes a tick hungry. What the balance
+        // cannot cover is forgiven (STEPS.md, step 4).
+        const due = finesDue.get(id) ?? [];
+        if (due.length > 0) {
+            const paid = due.map(fine => {
+                const amount = Math.min(fine.due, balance);
+                balance -= amount;
+                return { ...fine, paid: amount };
+            });
+            finesPaid.set(id, paid);
+        }
 
         const hungerTicks = nextHunger(agent.hungerTicks, paidUpkeep, laws.upkeep);
         const age = agent.age + 1;
@@ -257,14 +388,42 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
             giftsSent: gifts.filter(g => g.from === id).map(({ to, amount }) => ({ to, amount })),
             ignored: [...(invalid.get(id) ?? [])],
             upkeep: { paid: upkeepCharges.get(id) ?? 0, due: laws.upkeep },
+            ...caughtOutcome(caughtNow.find(v => v.agent === id)),
+            ...(finesPaid.has(id) ? { fines: finesPaid.get(id)! } : {}),
         });
     }
+
+    // The new forum. A case closes when its fine was taken (paid in full or not) or its accused died;
+    // the others stay listed. New cases open for judging next tick.
+    const fineTaken = new Set([...finesPaid.values()].flat().map(f => f.caseId));
+    const opened: Case[] = caughtNow
+        .filter(v => newAgents.has(v.agent))
+        .map(v => ({ id: `c-${worldState.tick}-${v.agent}`, agent: v.agent, tick: worldState.tick, took: v.took, quota: v.quota }));
+    const newForum: ForumState = {
+        quota: forum.quota,
+        proposals: forum.proposed,
+        cases: [...worldState.forum.cases.filter(c => !fineTaken.has(c.id) && newAgents.has(c.agent)), ...opened],
+        delegations: forum.delegations,
+    };
+    const news: ForumNews = {
+        tick: worldState.tick,
+        proposals: worldState.forum.proposals.map((p, i) => ({ ...p, ...forum.results[i]! })),
+        adopted: forum.adopted,
+        verdicts: forum.verdicts.map(({ case: c, verdict }) => ({
+            caseId: c.id, agent: c.agent, ...verdict,
+            paid: finesPaid.get(c.agent)?.find(f => f.caseId === c.id)?.paid ?? 0,
+        })),
+    };
+    const fines = new Map([...finesPaid].map(([id, paid]) => [id, paid.reduce((sum, f) => sum + f.paid, 0)]));
+    const finesTotal = [...fines.values()].reduce((sum, amount) => sum + amount, 0);
 
     // Collapse is permanent: once collapsed, the world stays collapsed even if P rises again.
     // It is checked after harvest and before regrow, so a pool pushed below the threshold
     // does not get one more tick of growth.
-    const collapsed = worldState.collapsed || afterHarvestP < laws.collapseAt * laws.K;
-    const newP = regrow(afterHarvestP, collapsed, laws);
+    // Fines go back to the pool before the collapse check: restitution to the commons.
+    const afterFinesP = afterHarvestP + finesTotal;
+    const collapsed = worldState.collapsed || afterFinesP < laws.collapseAt * laws.K;
+    const newP = regrow(afterFinesP, collapsed, laws);
 
     const newWorldState: WorldState = {
         seed: worldState.seed,
@@ -273,6 +432,8 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         collapsed,
         agents: newAgents,
         lifespans: new Map([...worldState.lifespans].filter(([id]) => newAgents.has(id))),
+        forum: newForum,
+        news,
     };
     return {
         state: newWorldState,
@@ -288,6 +449,7 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
             dead,
             collapsed,
             outcomes,
+            forum: { ...forum.report, proposed: forum.proposed, news, quota: forum.quota, caught: opened, fines },
         }
     };
 }
@@ -312,6 +474,14 @@ export function observe(worldState: WorldState, laws: Readonly<Laws>): Map<Agent
             estimatedP,
             // A copy per agent: a policy that mutates its laws must not change them for anyone else.
             laws: structuredClone(laws),
+            // A copy per agent, like laws. The public forum, plus this agent's own delegation only.
+            forum: structuredClone({
+                quota: worldState.forum.quota,
+                proposals: worldState.forum.proposals,
+                cases: worldState.forum.cases,
+                myDelegate: worldState.forum.delegations.get(id) ?? null,
+                news: worldState.news,
+            }),
         };
         return [id, observation];
     }));
@@ -340,6 +510,8 @@ export function createWorld(
         collapsed: false,
         agents: new Map(agentIds.map(id => [id, { age: 0, balance, hungerTicks: 0 }])),
         lifespans: new Map(agentIds.map(id => [id, lifespan])),
+        forum: emptyForum(),
+        news: null,
     };
 }
 

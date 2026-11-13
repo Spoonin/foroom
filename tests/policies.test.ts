@@ -1,3 +1,4 @@
+import { emptyForum } from "../src/world/forum";
 import { it, expect, describe } from "vitest";
 import { fairShareAmount, fairSharePolicy, makeStewardPolicy, subsistenceAmount, TROUBLE_AT } from "../src/agents/policies/fairShare";
 import { makeRandomPolicy } from "../src/agents/policies/random";
@@ -14,10 +15,14 @@ const laws: Laws = Object.freeze({
     maxHarvestFraction: 0.5,
     sigma: 0.05,
     upkeep: 100,
-    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, pair: 500, spawn: 2000 },
+    prices: { harvest: 100, gift: 0, propose: 1000, vote: 100, delegate: 100, judge: 0, pair: 500, spawn: 2000 },
     starvationTicks: 3,
     maxMessagesPerTick: 3,
     maxMessageChars: 300,
+    quorum: 0.5,
+    punishShare: 2 / 3,
+    detectionChance: 0.5,
+    maxFineMultiple: 3,
 });
 
 const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observation => ({
@@ -27,6 +32,7 @@ const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observat
     residents: Array.from({ length: citizenCount }, (_, i) => (i === 0 ? "me" : `other-${i}`)),
     estimatedP,
     laws,
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
 });
 
 // Rule-based policies are synchronous; this unwraps the single harvest amount.
@@ -106,6 +112,8 @@ describe("fairShare", () => {
             collapsed: false,
             agents: new Map(ids.map(id => [id, { age: 0, balance: 1000, hungerTicks: 0 }])),
             lifespans: new Map(ids.map(id => [id, Infinity])), // immortal in step 2
+            forum: emptyForum(),
+            news: null,
         };
 
         for (let t = 0; t < 250; t++) {

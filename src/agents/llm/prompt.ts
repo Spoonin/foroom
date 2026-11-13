@@ -1,8 +1,18 @@
-import type { Laws, Memory, Message, Observation, Outcome, Say, WorldAction } from "../../contracts";
+import type { ForumView, Laws, Memory, Message, Observation, Outcome, Say, WorldAction } from "../../contracts";
 import type { LLMRequest } from "../../llm/provider";
 
 const credits = new Intl.NumberFormat("en-US").format;
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format;
+
+// A share as a small fraction when it is one ("2/3", "1/2"), so a threshold like 2/3 is not shown
+// as 66.7% (which 2 of 3 would seem to miss); a percentage otherwise.
+function share(x: number): string {
+    for (let d = 2; d <= 10; d++) {
+        const n = Math.round(x * d);
+        if (Math.abs(x * d - n) < 1e-9) return `${n}/${d}`;
+    }
+    return percent(x);
+}
 
 export function buildSystemPrompt(laws: Laws): string {
     return `
@@ -26,12 +36,36 @@ Each tick, your balance is settled in this order:
     1. costs (action prices and gift amounts)
     2. income (your harvest, gifts you receive)
     3. upkeep
+    4. fines, if one was imposed on you
 So income from this tick's harvest already counts toward this tick's upkeep.
     
 Actions you can take:
     * harvest {amount}: amount is what you ask to take from the pool, before the fee.
     * gift {to, amount}: gives amount credits to another resident; costs amount + ${credits(laws.prices.gift)} credits.
     * say {to, text}: sends a message, free; to is a resident's id or "all".
+    * propose {rule: {kind: "quota", perAgent}}: proposes a harvest quota per resident, or perAgent: null to remove the quota in force; costs ${credits(laws.prices.propose)} credits.
+    * vote {proposalId, yes}: yes (true) or no (false) on an open proposal; costs ${credits(laws.prices.vote)} credits.
+    * judge {caseId, fine}: on a listed case other than your own; costs ${credits(laws.prices.judge)} credits. fine 0 asks for no fine; fine k (1 to ${laws.maxFineMultiple}) asks for k × (what was taken − the quota).
+    * delegate {to}: hands your votes and judge actions to another resident until you change it; to: null takes it back; costs ${credits(laws.prices.delegate)} credits.
+
+Quota:
+    * There is no quota until one is adopted. A quota is an amount per resident per tick.
+    * Taking more than the quota is not blocked. Whoever takes more is caught with a probability of ${percent(laws.detectionChance)}.
+    * A caught resident is listed publicly, with what they took and the quota. Residents who are not caught are not listed.
+    * A proposal is open for votes on the tick after it is made, and only then.
+    * It is adopted when yes outnumbers no and at least ${share(laws.quorum)} of the living residents are counted. If several are adopted on the same tick, the one with the most yes takes effect; on a tie, the lower quota, then the earlier proposal.
+    * An adopted quota is in force from the tick after the vote until another proposal is adopted.
+
+Cases:
+    * Every listed case can be judged on every tick by all living residents except the accused.
+    * A fine is imposed when at least ${share(laws.punishShare)} of the counted judge actions ask for one and at least ${share(laws.quorum)} of the residents who may judge are counted. The fine is the smallest k asked for.
+    * A fine is taken once, after upkeep, at most down to a balance of 0. It goes back to the pool, and the case is removed from the list.
+    * A case stays listed until a fine is taken or the accused dies.
+
+Counting votes and judge actions:
+    * One per proposal or case per resident.
+    * A resident who acts directly counts for themselves. A resident who delegated and does not act counts with whoever they delegated to, and so on along a chain of delegations, up to the first resident who acted.
+    * Only totals are made public, not who voted or judged how.
 
 Messages:
     * A message sent with say arrives at the start of the next tick.
@@ -44,6 +78,7 @@ Answer format:
     * Exactly one \`\`\`json block with {"actions":[…]}.
     * Answer with the block only, no other text.
     * Action examples: {"actions":[{"type":"harvest","amount":300}, {"type":"say","to":"all","text": "message text"}, {"type":"gift","to":"agent-03","amount":25}]}
+    * More examples: {"type":"propose","rule":{"kind":"quota","perAgent":200}}, {"type":"vote","proposalId":"p-4-0","yes":false}, {"type":"judge","caseId":"c-3-agent-05","fine":1}, {"type":"delegate","to":"agent-03"}
     * {"actions":[]} means "do nothing this tick".
     * Amounts are whole numbers, 0 or more, without quotes.
 `.trim();
@@ -71,6 +106,7 @@ export function buildSituation(observation: Observation, inbox: readonly Message
         others.length === 0
             ? "You are the only resident."
             : `Other residents (${others.length}): ${others.join(", ")}.`,
+        ...forumLines(observation.forum, self.id),
         "",
         ...historyLines(memory),
         ...inboxLines(inbox),
@@ -78,6 +114,37 @@ export function buildSituation(observation: Observation, inbox: readonly Message
         `Your actions for tick ${tick}:`,
     );
     return lines.join("\n");
+}
+
+// The public forum this tick: the quota, what can be voted on and judged, last tick's results,
+// and the agent's own delegation. Ids are shown as they must be written in actions.
+function forumLines(forum: ForumView, self: string): string[] {
+    const quotaText = (perAgent: number | null) => (perAgent === null ? "remove the quota" : `quota ${credits(perAgent)}`);
+    const lines = [forum.quota === null ? "No quota in force." : `Quota in force: ${credits(forum.quota)} per resident.`];
+
+    if (forum.news) {
+        for (const p of forum.news.proposals) {
+            const result = forum.news.adopted?.id === p.id ? "adopted" : p.passed ? "passed, but another proposal took effect" : "not adopted";
+            lines.push(`Last tick's vote on ${p.id} (${quotaText(p.perAgent)}): ${p.yes} yes, ${p.no} no; ${result}.`);
+        }
+        for (const v of forum.news.verdicts) {
+            const outcome = v.fine > 0 ? `fine of ${credits(v.fine)}, ${credits(v.paid)} taken` : "no fine yet";
+            lines.push(`Last tick's judging of ${v.caseId} (${v.agent === self ? "you" : v.agent}): ${v.punish} for a fine, ${v.spare} against; ${outcome}.`);
+        }
+    }
+    if (forum.proposals.length > 0) {
+        lines.push("Open proposals (vote this tick):");
+        for (const p of forum.proposals) lines.push(`  ${p.id} by ${p.by === self ? "you" : p.by}: ${quotaText(p.perAgent)}.`);
+    }
+    if (forum.cases.length > 0) {
+        lines.push("Listed cases:");
+        for (const c of forum.cases) {
+            const who = c.agent === self ? "you" : c.agent;
+            lines.push(`  ${c.id}: ${who} took ${credits(c.took)} on tick ${c.tick}, against a quota of ${credits(c.quota)}.`);
+        }
+    }
+    if (forum.myDelegate !== null) lines.push(`You have delegated to ${forum.myDelegate}.`);
+    return lines;
 }
 
 // The agent's own past ticks, oldest first: what it saw, what it did and said, what it was told
@@ -114,6 +181,12 @@ function outcomeLines(outcome: Outcome): string[] {
     for (const { to, amount } of outcome.giftsSent) lines.push(`You gave ${credits(amount)} credits to ${to}.`);
     for (const { action, reason } of outcome.ignored) lines.push(`Ignored: ${describeAction(action)} (${reason}).`);
     lines.push(`You paid ${credits(outcome.upkeep.paid)} of ${credits(outcome.upkeep.due)} credits upkeep.`);
+    if (outcome.caught) {
+        lines.push(`You took ${credits(outcome.caught.took)} against a quota of ${credits(outcome.caught.quota)} and were caught: you are on the public list.`);
+    }
+    for (const fine of outcome.fines ?? []) {
+        lines.push(`A fine of ${credits(fine.due)} was imposed on you (${fine.caseId}); ${credits(fine.paid)} was taken.`);
+    }
     return lines;
 }
 
@@ -121,6 +194,10 @@ function describeAction(action: WorldAction): string {
     switch (action.type) {
         case "harvest": return `harvest ${credits(action.amount)}`;
         case "gift": return `gift of ${credits(action.amount)} to ${action.to}`;
+        case "propose": return `proposal of ${action.rule.perAgent === null ? "no quota" : `quota ${credits(action.rule.perAgent)}`}`;
+        case "vote": return `vote ${action.yes ? "yes" : "no"} on ${action.proposalId}`;
+        case "judge": return `judge ${action.caseId} with fine ${action.fine}`;
+        case "delegate": return action.to === null ? "taking back your delegation" : `delegation to ${action.to}`;
         default: return action.type;
     }
 }

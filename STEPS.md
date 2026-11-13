@@ -316,6 +316,16 @@ the prompt contains no regime names.
 
 ## Step 3.5 (optional). Agent on LangGraph
 
+> **Postponed** (decided after step 3). Return to it when it pays off:
+> - a weaker or local model gives unreadable answers, so the validate-and-retry loop has something to fix
+>   (DeepSeek Flash: 0 unreadable in ~960 answers);
+> - after step 4, to test whether a `reflect` node changes the political outcome, e.g. breaks an untested
+>   shared belief like "fees make harvesting pointless" (repeated by all agents for 36 ticks in one run);
+> - more variety is needed than one model gives (10 copies converge on one voice).
+>
+> When resuming: `LLMProvider` is now `Provider`; the CLI has `--agents N --policy`, not `llm:3,graph:3`;
+> check the Runner's tick deadline against 3 sequential calls per turn.
+
 The goal is to understand what an agent framework gives you compared with the hand-written
 loop from step 3. LangGraph is used **only inside a single agent**, behind the `Policy`
 boundary. The collective stays on cue actors: a shared graph state would destroy the
@@ -376,6 +386,34 @@ actor: an adopted quota must cap harvest within the same atomic `resolve`). Prop
 a 1-tick voting window, a tally with transitive delegation and cycle protection. World caps
 harvest at the adopted quota and charges the price of every world action; if there is not
 enough money — `rejected`. `Observation` gains `openProposals`, `activeQuota`, `myDelegate`.
+
+**Forum rules (decided at the start of step 4; tests: `tests/forum.test.ts`):**
+- *Proposals.* Proposed on tick t (id `p-<tick>-<n>`, never chosen by the model), open for voting on
+  t+1, tallied in t+1's vote phase, in force from t+2. A proposal passes with yes > no and a quorum:
+  yes + no ≥ `quorum` × the living, delegated votes included. Of several that pass, the most yes
+  wins; a tie goes to the lower quota (any quota beats `null`, which lifts it), then the earlier
+  proposal. An adopted quota stays until another proposal replaces it.
+- *Delegation.* Transitive; the first direct voter up the chain decides for everyone below it; a
+  direct vote overrides one's own delegation for that vote; cycles without a voter give no vote;
+  the dead (and, in a case, the accused) are passed through to their own delegate.
+- *The quota is not a cap.* Taking more than it is possible. A violation is judged on what was
+  actually taken (gross), not what was asked.
+- *Detection.* Each violator is caught with probability `detectionChance` (one seeded draw per
+  violator, in id order). Only caught violators go on the public list (agent, taken, quota);
+  the others stay hidden.
+- *Cases.* Every living citizen except the accused may vote on each open case: 0 = spare, k
+  (1…`maxFineMultiple`) = a fine of k × the excess (taken − quota). Punished when punish ≥
+  `punishShare` × the votes cast and the quorum is met; the fine is the smallest punishing k ×
+  the excess. Delegation applies, so a judge can emerge.
+  - A case vote is free (price 0); proposal votes keep their price.
+  - A case stays open, and is voted on again every tick, until a fine is taken. There is no
+    acquittal: being spared on one tick only means not yet.
+  - The fine is taken once, **after** upkeep (so a fine alone never causes hunger that tick),
+    down to a balance of 0 at most, and goes back to the pool. Once it is taken, the case
+    closes and the citizen leaves the list. What could not be paid is forgiven: emptying one's
+    balance before the verdict (e.g. gifting to a friend) is a loophole left in on purpose, to
+    see whether agents find it.
+  - A violator who dies with a case open: the case closes.
 
 **✍️:**
 1. A talk and forum section in the prompt: who can be messaged, the caps, that talk is free and

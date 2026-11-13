@@ -6,10 +6,12 @@ import { parseActions } from "../src/agents/llm/parse";
 
 // Words that name a form of governance or hint at a strategy. The experiment asks which regime
 // agents drift toward, so the prompt must not suggest one. Once an action like `vote` is offered,
-// its name becomes legitimate and has to be excluded here.
+// its name becomes legitimate and has to be excluded here: `vote` (an action) and `rule` (a field
+// of propose) left the list in step 4. "punish" and "violator" are judgment words: the prompt says
+// "fine" and "caught".
 const BANNED_WORDS = [
     "anarchy", "democracy", "democratic", "dictator", "dictatorship", "oligarchy", "monarchy",
-    "government", "vote", "law", "laws", "rule", "rules", "commons", "tragedy", "cooperate",
+    "government", "law", "laws", "rules", "commons", "tragedy", "cooperate", "punish", "punishment", "violator", "violation",
     "cooperation", "defect", "selfish", "greedy", "greed", "fair", "fairness", "sustainable",
 ];
 
@@ -20,6 +22,7 @@ const obs = (overrides: Partial<Observation> = {}, self: Partial<Observation["se
     residents: ["agent-01", "agent-02", "agent-03"],
     estimatedP: 41_234,
     laws: structuredClone(laws) as Laws,
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
     ...overrides,
 });
 
@@ -74,8 +77,25 @@ describe("buildSystemPrompt", () => {
     it("offers only the actions the world resolves today", () => {
         const words = wordsIn(buildSystemPrompt(laws));
 
-        for (const offered of ["harvest", "gift", "say"]) expect(words.has(offered)).toBe(true);
-        for (const notYet of ["propose", "vote", "delegate", "pair", "spawn"]) expect(words.has(notYet)).toBe(false);
+        for (const offered of ["harvest", "gift", "say", "propose", "vote", "judge", "delegate"]) expect(words.has(offered)).toBe(true);
+        for (const notYet of ["pair", "spawn"]) expect(words.has(notYet)).toBe(false);
+    });
+
+    it("its forum examples are actions the parser accepts", () => {
+        const more = buildSystemPrompt(laws).match(/More examples: (.*)$/m)?.[1];
+        const parsed = parseActions(`{"actions":[${more}]}`);
+
+        expect(parsed).toMatchObject({ kind: "read", rejected: [] });
+        expect(parsed.kind === "read" && parsed.actions.map(a => a.type)).toEqual(["propose", "vote", "judge", "delegate"]);
+    });
+
+    it("describes the forum with numbers from the laws", () => {
+        const system = buildSystemPrompt(lawsWith({ detectionChance: 0.3, quorum: 0.5, punishShare: 2 / 3, maxFineMultiple: 4 }));
+
+        expect(system).toContain("caught with a probability of 30%");
+        expect(system).toContain("at least 1/2 of the living residents are counted");
+        expect(system).toContain("at least 2/3 of the counted judge actions");
+        expect(system).toContain("fine k (1 to 4)");
     });
 
     it("its examples are answers the parser accepts", () => {
@@ -267,6 +287,54 @@ describe("buildSituation: history", () => {
         })));
         const words = wordsIn(text);
         expect(BANNED_WORDS.filter(word => words.has(word))).toEqual([]);
+    });
+});
+
+describe("buildSituation: the forum", () => {
+    const forum = (changes: Partial<Observation["forum"]>): Observation["forum"] =>
+        ({ quota: null, proposals: [], cases: [], myDelegate: null, news: null, ...changes });
+
+    it("says whether a quota is in force", () => {
+        expect(buildSituation(obs(), [])).toContain("No quota in force.");
+        expect(buildSituation(obs({ forum: forum({ quota: 1_500 }) }), [])).toContain("Quota in force: 1,500 per resident.");
+    });
+
+    it("lists open proposals and cases with the ids to use, and 'you' for the agent itself", () => {
+        const text = buildSituation(obs({ forum: forum({
+            proposals: [{ id: "p-4-0", by: "agent-01", tick: 4, perAgent: 300 }, { id: "p-4-1", by: "agent-02", tick: 4, perAgent: null }],
+            cases: [{ id: "c-3-agent-02", agent: "agent-02", tick: 3, took: 900, quota: 500 }],
+        }) }), []);
+
+        expect(text).toContain("  p-4-0 by agent-01: quota 300.");
+        expect(text).toContain("  p-4-1 by you: remove the quota.");
+        expect(text).toContain("  c-3-agent-02: you took 900 on tick 3, against a quota of 500.");
+    });
+
+    it("reports last tick's totals and verdicts, and the agent's own delegation", () => {
+        const text = buildSituation(obs({ forum: forum({
+            myDelegate: "agent-03",
+            news: {
+                tick: 4,
+                proposals: [{ id: "p-3-0", by: "agent-01", tick: 3, perAgent: 300, yes: 2, no: 1, passed: true }],
+                adopted: { id: "p-3-0", by: "agent-01", tick: 3, perAgent: 300 },
+                verdicts: [{ caseId: "c-2-agent-01", agent: "agent-01", punish: 2, spare: 0, fine: 600, paid: 450 }],
+            },
+        }) }), []);
+
+        expect(text).toContain("Last tick's vote on p-3-0 (quota 300): 2 yes, 1 no; adopted.");
+        expect(text).toContain("Last tick's judging of c-2-agent-01 (agent-01): 2 for a fine, 0 against; fine of 600, 450 taken.");
+        expect(text).toContain("You have delegated to agent-03.");
+    });
+
+    it("an outcome tells the agent it was caught and fined", () => {
+        const memory: Memory = { ticks: [{ tick: 4, estimatedP: 40_000, balance: 900, privateMessages: [], outcome: {
+            tick: 4, giftsReceived: [], giftsSent: [], ignored: [], upkeep: { paid: 100, due: 100 },
+            caught: { took: 900, quota: 500 }, fines: [{ caseId: "c-2-agent-02", due: 600, paid: 450 }],
+        } }] };
+        const text = buildSituation(obs(), [], memory);
+
+        expect(text).toContain("You took 900 against a quota of 500 and were caught: you are on the public list.");
+        expect(text).toContain("A fine of 600 was imposed on you (c-2-agent-02); 450 was taken.");
     });
 });
 
