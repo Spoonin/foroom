@@ -9,7 +9,7 @@
 //   5. fines go to the pool; collapse check; regrowth
 
 import type { ServerRef, Supervisor } from "@cue/core";
-import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation, type Outcome, type Case, type ForumNews, type ForumReport, type ForumState, type Proposal } from "../contracts";
+import { type Harvest, AgentId, type Laws, type WorldAction, type WorldState, type AgentState, type Report, type InvalidReason, type DeathReason, type Observation, type Outcome, type Case, type ForumNews, type ForumReport, type ForumState, type PoolFlows, type Proposal } from "../contracts";
 import { deriveSeed, rng, rngNormal } from "../rng";
 import { detectViolations, emptyForum, judgeCase, tallyProposals } from "./forum";
 
@@ -424,6 +424,13 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
     const afterFinesP = afterHarvestP + finesTotal;
     const collapsed = worldState.collapsed || afterFinesP < laws.collapseAt * laws.K;
     const newP = regrow(afterFinesP, collapsed, laws);
+    const flows: PoolFlows = {
+        tick: worldState.tick,
+        harvested: [...grossHarvests.values()].reduce((sum, gross) => sum + gross, 0),
+        fines: finesTotal,
+        regrowth: newP - afterFinesP,
+        change: newP - worldState.P,
+    };
 
     const newWorldState: WorldState = {
         seed: worldState.seed,
@@ -434,6 +441,7 @@ export function resolve(worldState: WorldState, submissions: Map<AgentId, WorldA
         lifespans: new Map([...worldState.lifespans].filter(([id]) => newAgents.has(id))),
         forum: newForum,
         news,
+        flows,
     };
     return {
         state: newWorldState,
@@ -482,6 +490,7 @@ export function observe(worldState: WorldState, laws: Readonly<Laws>): Map<Agent
                 myDelegate: worldState.forum.delegations.get(id) ?? null,
                 news: worldState.news,
             }),
+            flows: worldState.flows && { ...worldState.flows },
         };
         return [id, observation];
     }));
@@ -512,6 +521,7 @@ export function createWorld(
         lifespans: new Map(agentIds.map(id => [id, lifespan])),
         forum: emptyForum(),
         news: null,
+        flows: null,
     };
 }
 

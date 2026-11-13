@@ -22,7 +22,7 @@ const obs = (tick: Tick): Observation => ({
     residents: ["a", "b", "c", "d", "e"],
     estimatedP: 50_000,
     laws,
-    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null }, flows: null,
 });
 
 const harvest = (amount: number): WorldAction[] => [{ type: "harvest", amount }];

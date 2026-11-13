@@ -249,6 +249,17 @@ export interface ForumNews {
     verdicts: { caseId: string; agent: AgentId; punish: number; spare: number; fine: number; paid: number }[];
 }
 
+// What went in and out of the pool in one tick, exact and in aggregate: everyone sees the totals,
+// never who took what. The first value of the information variable (PLAN.md): agents see flows,
+// not the growth formula, and have to reason from them to a sustainable harvest.
+export interface PoolFlows {
+    tick: Tick; // the tick they describe
+    harvested: number; // gross, all residents together
+    fines: number; // fines taken, returned to the pool
+    regrowth: number; // 0 once collapsed
+    change: number; // the pool after the tick minus the pool before it
+}
+
 export interface WorldState {
     seed: number; // the run seed: every random draw in the world is derived from it (see observe)
     tick: Tick;
@@ -257,6 +268,7 @@ export interface WorldState {
     agents: Map<AgentId, AgentState>;
     forum: ForumState;
     news: ForumNews | null; // what the last resolve decided; null before the first
+    flows: PoolFlows | null; // the pool's flows in the last resolve; null before the first
     // Hidden from agents: the tick count each agent lives, after which it dies of old age.
     // Kept apart from AgentState so that copying an agent's state can never leak it.
     lifespans: Map<AgentId, number>;
@@ -306,6 +318,7 @@ export interface Observation {
     estimatedP: number;
     laws: Laws;
     forum: ForumView;
+    flows: PoolFlows | null; // last tick's pool totals; null on the first tick
 }
 
 // The public forum, as every citizen sees it, plus its own delegation.

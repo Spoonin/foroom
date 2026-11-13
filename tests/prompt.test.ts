@@ -22,7 +22,7 @@ const obs = (overrides: Partial<Observation> = {}, self: Partial<Observation["se
     residents: ["agent-01", "agent-02", "agent-03"],
     estimatedP: 41_234,
     laws: structuredClone(laws) as Laws,
-    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null }, flows: null,
     ...overrides,
 });
 

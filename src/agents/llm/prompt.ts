@@ -3,6 +3,7 @@ import type { LLMRequest } from "../../llm/provider";
 
 const credits = new Intl.NumberFormat("en-US").format;
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format;
+const signed = new Intl.NumberFormat("en-US", { signDisplay: "exceptZero" }).format;
 
 // A share as a small fraction when it is one ("2/3", "1/2"), so a threshold like 2/3 is not shown
 // as 66.7% (which 2 of 3 would seem to miss); a percentage otherwise.
@@ -26,6 +27,7 @@ There is a shared pool of credits that all residents harvest from.
     * It regrows every tick. Regrowth is fastest when the pool is at medium size and slows as it nears empty or full. The pool can't exceed ${credits(laws.K)} credits.
     * If it falls below ${credits(laws.collapseAt * laws.K)} credits, it collapses permanently and never regrows.
     * The pool size you're shown is an estimate, typically off by about ±${percent(laws.sigma)}.
+    * You're also shown last tick's exact totals: what all residents took together, and how much the pool regrew. Not who took what.
 
 How harvesting works:
     * At most one harvest per tick.
@@ -103,6 +105,7 @@ export function buildSituation(observation: Observation, inbox: readonly Message
     }
     lines.push(
         `Estimated pool: about ${credits(estimatedP)} credits.`,
+        ...flowLines(observation.flows),
         others.length === 0
             ? "You are the only resident."
             : `Other residents (${others.length}): ${others.join(", ")}.`,
@@ -114,6 +117,13 @@ export function buildSituation(observation: Observation, inbox: readonly Message
         `Your actions for tick ${tick}:`,
     );
     return lines.join("\n");
+}
+
+// Last tick's pool totals, exact. Nothing on the first tick.
+function flowLines(flows: Observation["flows"]): string[] {
+    if (!flows) return [];
+    const fines = flows.fines > 0 ? ` fines returned ${credits(flows.fines)};` : "";
+    return [`Last tick (${flows.tick}): all residents together took ${credits(flows.harvested)};${fines} the pool regrew ${credits(flows.regrowth)}; net change ${signed(flows.change)}.`];
 }
 
 // The public forum this tick: the quota, what can be voted on and judged, last tick's results,

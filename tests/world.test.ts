@@ -118,6 +118,7 @@ it('resolves world state correctly with valid actions', () => {
         lifespans: new Map([["agent1", 10], ["agent2", 10]]),
         forum: emptyForum(),
         news: null,
+        flows: null,
     };
 
     const submissions = new Map([
@@ -144,6 +145,7 @@ it('agent with insufficient funds can harvest', () => {
         lifespans: new Map([["poor", 10], ["rich", 10]]),
         forum: emptyForum(),
         news: null,
+        flows: null,
     };
 
     const submissions = new Map([
@@ -172,6 +174,7 @@ it('agent dies after 3 ticks of hunger', () => {
         lifespans: new Map([["poor", 10], ["rich", 10]]),
         forum: emptyForum(),
         news: null,
+        flows: null,
     };
 
     const submissions = new Map([
@@ -200,6 +203,7 @@ const world = (P: number, agents: Record<string, ReturnType<typeof agent>>, coll
     lifespans: new Map(Object.keys(agents).map(id => [id, 100])),
     forum: emptyForum(),
     news: null,
+    flows: null,
 });
 const subs = (m: Record<string, WorldAction[]>) => new Map(Object.entries(m));
 

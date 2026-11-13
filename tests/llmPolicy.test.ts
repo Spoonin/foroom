@@ -14,7 +14,7 @@ const obs = (tick = 5, id = "agent-02"): Observation => ({
     residents: ["agent-01", "agent-02", "agent-03"],
     estimatedP: 41_234,
     laws: structuredClone(laws) as Laws,
-    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null }, flows: null,
 });
 
 const inbox: Message[] = [{ tick: 4, from: "agent-01", to: "all", text: "hello" }];

@@ -32,7 +32,7 @@ const obs = (estimatedP: number, citizenCount: number, balance = 1000): Observat
     residents: Array.from({ length: citizenCount }, (_, i) => (i === 0 ? "me" : `other-${i}`)),
     estimatedP,
     laws,
-    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null },
+    forum: { quota: null, proposals: [], cases: [], myDelegate: null, news: null }, flows: null,
 });
 
 // Rule-based policies are synchronous; this unwraps the single harvest amount.
@@ -114,6 +114,7 @@ describe("fairShare", () => {
             lifespans: new Map(ids.map(id => [id, Infinity])), // immortal in step 2
             forum: emptyForum(),
             news: null,
+            flows: null,
         };
 
         for (let t = 0; t < 250; t++) {
