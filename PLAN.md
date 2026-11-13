@@ -293,7 +293,16 @@ Each step ends with something you can run and see.
 
 ## Open questions
 
-None at the moment: all current ones are resolved, see below.
+- **Why do citizens save, and what are savings for?** In every LLM run agents keep thousands of
+  credits (the 10-agent runs ended tick 16 with 3k–7k each) and reason in "runway" ("I have 4.4k,
+  about 44 ticks"). Today credits can only buy survival (upkeep), gifts and forum actions, so
+  saving is pure insurance: against hunger, a collapse, a fine. Things to find out:
+  - what agents themselves say savings are for (message analysis: runway, buffer, fines, gifts);
+  - whether saving changes once credits have a real use: step 6 (pair/spawn cost credits plus an
+    endowment, so savings become offspring and inheritance), or a way to put credits back into
+    the pool to rebuild it (relevant to the low-level trap at ~20k seen with quota 250);
+  - whether savings buy power: a rich agent can afford proposals (1,000) and gifts that others
+    cannot. Worth a metric: balance inequality (Gini) next to power concentration (HHI).
 
 ## Decisions made
 
