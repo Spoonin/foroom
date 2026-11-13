@@ -317,6 +317,17 @@ None at the moment: all current ones are resolved, see below.
 - An agent's broken output (invalid actions) is an empty turn, recorded with its reason. A failure
   is data for the experiment, never a crash of the run.
 
+## The information variable
+What agents know about the pool is an experimental variable, set deliberately and recorded per run.
+- **B (current, from step 4):** a noisy estimate of the pool (±σ), plus last tick's **exact
+  aggregate flows**: total harvested by everyone, fines returned, regrowth, net change. Never who
+  took what. Agents must reason from flows to a sustainable harvest; the growth formula is not given.
+- Alternatives for comparison: **A** — the level only, no flows (all runs before step 4);
+  **C** — B plus the growth rate r, so regrowth can be predicted at any pool size.
+- Why B: in the first forum run (10 agents) the procedure worked flawlessly (unanimous votes,
+  no violations) yet adopted a quota of 800 against a sustainable ~250: the failure was knowledge,
+  not the institution. Aggregate totals also make defection visible in sum without naming anyone.
+
 ## After foroom: spinoff ideas
 - **A Mafia benchmark across models** (Anthropic, OpenAI, Gemini, Kimi, DeepSeek, Qwen…), started
   only once foroom is finished. Mixed tables with seats and roles rotated; ratings per role
