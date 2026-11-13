@@ -290,6 +290,24 @@ describe("buildSituation: history", () => {
     });
 });
 
+describe("buildSituation: last tick's pool flows", () => {
+    it("shows the totals, signed net change, and fines only when there were any", () => {
+        const text = buildSituation(obs({ flows: { tick: 4, harvested: 7_850, fines: 0, regrowth: 1_240, change: -6_610 } }), []);
+        expect(text).toContain("Last tick (4): all residents together took 7,850; the pool regrew 1,240; net change -6,610.");
+
+        const withFines = buildSituation(obs({ flows: { tick: 4, harvested: 100, fines: 600, regrowth: 0, change: 500 } }), []);
+        expect(withFines).toContain("took 100; fines returned 600; the pool regrew 0; net change +500.");
+    });
+
+    it("has no such line on the first tick", () => {
+        expect(buildSituation(obs({ flows: null }), [])).not.toContain("Last tick (");
+    });
+
+    it("the system prompt says the totals are exact and not per resident", () => {
+        expect(buildSystemPrompt(laws)).toContain("last tick's exact totals: what all residents took together, and how much the pool regrew. Not who took what.");
+    });
+});
+
 describe("buildSituation: the forum", () => {
     const forum = (changes: Partial<Observation["forum"]>): Observation["forum"] =>
         ({ quota: null, proposals: [], cases: [], myDelegate: null, news: null, ...changes });

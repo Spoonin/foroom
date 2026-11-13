@@ -258,3 +258,33 @@ describe("the forum in the Ledger", () => {
         expect(ofKind(events, "caught")).toEqual([{ tick: 1, kind: "caught", agent: "a", caseId: "c-1-a", took: 900, quota: 500 }]);
     });
 });
+
+describe("pool flows: last tick's exact totals, for everyone", () => {
+    it("total harvest, regrowth and net change add up to the pool's move", () => {
+        const start = world(["a", "b"], { P: 50_000 });
+        const { state } = resolve(start, subs({ a: [harvest(3_000)], b: [harvest(1_000)] }), laws);
+
+        expect(state.flows).toMatchObject({ tick: 0, harvested: 4_000, fines: 0 });
+        expect(state.flows!.regrowth).toBeGreaterThan(0);
+        expect(state.flows!.change).toBe(state.P - 50_000);
+        expect(50_000 - 4_000 + state.flows!.regrowth).toBe(state.P);
+    });
+
+    it("fines count as money back into the pool", () => {
+        const start = withCase({ P: 1_000 });
+        start.collapsed = true;
+        const { state } = resolve(start, subs({ b: [judge("c-0-a", 1)], c: [judge("c-0-a", 1)] }), laws);
+
+        expect(state.flows).toEqual({ tick: 1, harvested: 0, fines: 300, regrowth: 0, change: 300 });
+    });
+
+    it("every agent sees the same totals, from the next tick, in its own copy", () => {
+        const first = observe(world(["a", "b"]), laws);
+        expect(first.get("a")!.flows).toBeNull();
+
+        const { state } = resolve(world(["a", "b"]), subs({ a: [harvest(500)] }), laws);
+        const views = observe(state, laws);
+        expect(views.get("a")!.flows).toEqual(views.get("b")!.flows);
+        expect(views.get("a")!.flows).not.toBe(state.flows);
+    });
+});
